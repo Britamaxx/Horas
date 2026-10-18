@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "801942012302",
+    "project_id": "horasv2-belajar-bahasa-batak",
+    "storage_bucket": "horasv2-belajar-bahasa-batak.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:801942012302:android:be46f2af0ae8ea355724df",
+        "android_client_info": {
+          "package_name": "com.example.belajar_bahasa_batak"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA54GwFMnwFYTWAH2v362R95u4Hy_tC5U8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

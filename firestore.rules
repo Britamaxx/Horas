@@ -1,0 +1,69 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+
+    // Field yang boleh ada di dokumen profil (sesuai UserProfile.toMap()).
+    function validProfile(uid) {
+      let d = request.resource.data;
+      return d.keys().hasOnly([
+               'uid', 'displayName', 'email', 'photoUrl', 'providerIds',
+               'preferredDialect', 'createdAt', 'lastSignInAt', 'updatedAt'
+             ])
+             && d.uid == uid
+             && d.providerIds is list;
+    }
+
+    // Progres belajar: SATU dokumen per akun (users/{uid}/progress/summary).
+    // Angka hanya boleh bilangan bulat >= 0; daftar kata dibatasi ukurannya.
+    function validProgress() {
+      let d = request.resource.data;
+      return d.keys().hasOnly([
+               'savedEntryIds', 'completedQuizzes', 'correctAnswers',
+               'answeredQuestions', 'updatedAt'
+             ])
+             && d.get('savedEntryIds', []) is list
+             && d.get('savedEntryIds', []).size() <= 20000
+             && d.get('completedQuizzes', 0) is int
+             && d.get('completedQuizzes', 0) >= 0
+             && d.get('correctAnswers', 0) is int
+             && d.get('correctAnswers', 0) >= 0
+             && d.get('answeredQuestions', 0) is int
+             && d.get('answeredQuestions', 0) >= 0;
+    }
+
+    // Kamus untuk aplikasi (dibuat oleh tools/publish_dictionary.py).
+    // Boleh dibaca siapa saja, termasuk tamu yang belum login, karena mode
+    // tamu harus bisa memakai kamus. Tulis hanya lewat Admin SDK.
+    match /dictionary_meta/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /dictionary_packs/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Koleksi hasil impor awal (satu dokumen per kata). Tidak dipakai aplikasi.
+    match /dict_entries/{entryId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /users/{uid} {
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid) && validProfile(uid);
+      allow update: if isOwner(uid) && validProfile(uid)
+                    && request.resource.data.uid == resource.data.uid;
+      allow delete: if isOwner(uid);
+
+      match /progress/{docId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && docId == 'summary'
+                              && validProgress();
+      }
+    }
+  }
+}
