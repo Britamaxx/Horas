@@ -1,7 +1,13 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show PlatformException;
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'data/auth_repository.dart';
 import 'data/csv_dictionary_repository.dart';
@@ -232,16 +238,17 @@ class _AppBootstrapState extends State<_AppBootstrap> {
     final backend = await backendFuture;
     final savedIds = await _progressStore.loadSavedEntryIds();
     final quizStats = await _progressStore.loadQuizStats();
+    final guestSession = await _GuestSessionStore.load();
     final sentenceExercises = await widget.sentenceExerciseRepository
         .loadExercises(dialect: 'toba');
     return AppController(
       index: index,
       savedEntryIds: savedIds,
       quizStats: quizStats,
+      guestSession: guestSession,
       sentenceExercises: sentenceExercises,
       authRepository: widget.authRepository ?? backend?.auth,
-      userProfileRepository:
-          widget.userProfileRepository ?? backend?.profiles,
+      userProfileRepository: widget.userProfileRepository ?? backend?.profiles,
       progressStore: _progressStore,
       progressRepository: widget.progressRepository ?? backend?.progress,
     );
@@ -264,7 +271,7 @@ class _AppBootstrapState extends State<_AppBootstrap> {
             body: Center(child: CircularProgressIndicator()),
           );
         }
-        return _AppShell(controller: snapshot.data!);
+        return _AuthGate(controller: snapshot.data!);
       },
     );
   }
@@ -336,17 +343,22 @@ class AppController extends ChangeNotifier {
     required this.userProfileRepository,
     required this.progressStore,
     this.progressRepository,
-  }) : _activeStore = progressStore {
+    bool guestSession = false,
+  }) : _activeStore = progressStore,
+       isGuestSession = guestSession,
+       authResolved = authRepository == null {
     final authRepository = this.authRepository;
     if (authRepository != null) {
       _authSubscription = authRepository.authStateChanges.listen(
         (user) => unawaited(_handleAuthState(user)),
         onError: (Object error) {
           authError = error;
+          authResolved = true;
           if (!_disposed) notifyListeners();
         },
       );
     }
+    unawaited(_loadLocalProfile());
   }
 
   final DictionaryIndex index;
@@ -363,7 +375,17 @@ class AppController extends ChangeNotifier {
   Set<String> savedEntryIds;
   QuizStats quizStats;
   AppUser? currentUser;
+
+  /// True setelah status login awal (akun tersimpan atau belum) diketahui.
+  bool authResolved;
+
+  /// True selama sesi tamu aktif (tersimpan sampai pengguna keluar).
+  bool isGuestSession;
   UserProfile? userProfile;
+
+  /// Foto dan nama yang diubah pengguna (tersimpan lokal per akun).
+  Uint8List? profilePhoto;
+  String? profileNameOverride;
   Object? authError;
   Object? profileError;
   Object? progressError;
@@ -399,7 +421,9 @@ class AppController extends ChangeNotifier {
     await _activeStore.recordQuiz(correct, total);
     quizStats = quizStats.recordQuiz(correct, total);
     notifyListeners();
-    _pushToCloud((repository, uid) => repository.recordQuiz(uid, correct, total));
+    _pushToCloud(
+      (repository, uid) => repository.recordQuiz(uid, correct, total),
+    );
   }
 
   void _pushToCloud(
@@ -485,7 +509,9 @@ class AppController extends ChangeNotifier {
     notifyListeners();
 
     unawaited(
-      repository.mergeGuestProgress(uid, guest).catchError((Object error) async {
+      repository.mergeGuestProgress(uid, guest).catchError((
+        Object error,
+      ) async {
         progressError = error;
         // Gagal terkirim: kembalikan ke penyimpanan tamu agar tidak hilang.
         await _restoreGuestProgress(guest);
@@ -527,6 +553,52 @@ class AppController extends ChangeNotifier {
     await repository.signInWithGoogle();
   }
 
+  String get _profileStoreId => currentUser?.uid ?? 'guest';
+
+  String get displayName =>
+      profileNameOverride ??
+      userProfile?.displayName ??
+      currentUser?.displayName ??
+      'Tamu';
+
+  Future<void> _loadLocalProfile() async {
+    final id = _profileStoreId;
+    final stored = await _LocalProfileStore.load(id);
+    if (_disposed || id != _profileStoreId) return;
+    profilePhoto = stored.photo;
+    profileNameOverride = stored.name;
+    notifyListeners();
+  }
+
+  Future<void> setProfilePhoto(Uint8List? bytes) async {
+    final id = _profileStoreId;
+    await _LocalProfileStore.savePhoto(id, bytes);
+    if (_disposed || id != _profileStoreId) return;
+    profilePhoto = bytes;
+    notifyListeners();
+  }
+
+  Future<void> setProfileName(String? name) async {
+    final id = _profileStoreId;
+    final clean = name?.trim();
+    await _LocalProfileStore.saveName(id, clean);
+    if (_disposed || id != _profileStoreId) return;
+    profileNameOverride = (clean == null || clean.isEmpty) ? null : clean;
+    notifyListeners();
+  }
+
+  Future<void> continueAsGuest() async {
+    isGuestSession = true;
+    notifyListeners();
+    await _GuestSessionStore.save(true);
+  }
+
+  Future<void> leaveGuestSession() async {
+    isGuestSession = false;
+    notifyListeners();
+    await _GuestSessionStore.save(false);
+  }
+
   Future<void> signOut() async {
     final repository = authRepository;
     if (repository == null) {
@@ -537,6 +609,14 @@ class AppController extends ChangeNotifier {
 
   Future<void> _handleAuthState(AppUser? user) async {
     currentUser = user;
+    authResolved = true;
+    profilePhoto = null;
+    profileNameOverride = null;
+    unawaited(_loadLocalProfile());
+    if (user != null && isGuestSession) {
+      isGuestSession = false;
+      unawaited(_GuestSessionStore.save(false));
+    }
     userProfile = null;
     authError = null;
     profileError = null;
@@ -583,8 +663,341 @@ class AppController extends ChangeNotifier {
 
 enum _PracticeMode { quiz, sentences }
 
+enum _QuizPhase { intro, running, finished }
+
+/// Menyimpan status "sesi tamu aktif" agar halaman login tidak muncul lagi
+/// setiap aplikasi dibuka, sampai pengguna keluar dari mode tamu.
+class _GuestSessionStore {
+  const _GuestSessionStore._();
+
+  static const _key = 'horas.guest_session_active';
+
+  static Future<bool> load() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getBool(_key) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> save(bool active) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_key, active);
+    } catch (_) {
+      // Gagal menyimpan hanya berarti halaman login muncul lagi di sesi berikut.
+    }
+  }
+}
+
+/// Logo resmi Google "G" (SVG inline, tanpa file asset tambahan).
+const String _googleLogoSvg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">'
+    '<path fill="#4285F4" d="M45.12 24.5c0-1.56-.14-3.06-.4-4.5H24v8.51h11.84c-.51 2.75-2.06 5.08-4.39 6.64v5.52h7.11c4.16-3.83 6.56-9.47 6.56-16.17z"/>'
+    '<path fill="#34A853" d="M24 46c5.94 0 10.92-1.97 14.56-5.33l-7.11-5.52c-1.97 1.32-4.49 2.1-7.45 2.1-5.73 0-10.58-3.87-12.31-9.07H4.34v5.7C7.96 41.07 15.4 46 24 46z"/>'
+    '<path fill="#FBBC05" d="M11.69 28.18C11.25 26.86 11 25.45 11 24s.25-2.86.69-4.18v-5.7H4.34C2.85 17.09 2 20.45 2 24c0 3.55.85 6.91 2.34 9.88l7.35-5.7z"/>'
+    '<path fill="#EA4335" d="M24 10.75c3.23 0 6.13 1.11 8.41 3.29l6.31-6.31C34.91 4.18 29.93 2 24 2 15.4 2 7.96 6.93 4.34 14.12l7.35 5.7c1.73-5.2 6.58-9.07 12.31-9.07z"/>'
+    '</svg>';
+
+/// Penentu halaman awal: login (belum masuk) atau aplikasi (akun Google /
+/// sesi tamu). Pemilik [AppController], jadi dialah yang membuangnya.
+class _AuthGate extends StatefulWidget {
+  const _AuthGate({required this.controller});
+
+  final AppController controller;
+
+  @override
+  State<_AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<_AuthGate> {
+  @override
+  void dispose() {
+    widget.controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: widget.controller,
+      builder: (context, _) {
+        final controller = widget.controller;
+        final Widget child;
+        if (!controller.authResolved) {
+          child = const Scaffold(
+            key: ValueKey('auth-loading'),
+            body: Center(child: CircularProgressIndicator()),
+          );
+        } else if (controller.currentUser != null ||
+            controller.isGuestSession) {
+          child = _AppShell(
+            key: const ValueKey('app-shell'),
+            controller: controller,
+          );
+        } else {
+          child = _WelcomeScreen(
+            key: const ValueKey('welcome'),
+            controller: controller,
+          );
+        }
+        return AnimatedSwitcher(
+          duration: const Duration(milliseconds: 350),
+          child: child,
+        );
+      },
+    );
+  }
+}
+
+class _WelcomeScreen extends StatefulWidget {
+  const _WelcomeScreen({super.key, required this.controller});
+
+  final AppController controller;
+
+  @override
+  State<_WelcomeScreen> createState() => _WelcomeScreenState();
+}
+
+class _WelcomeScreenState extends State<_WelcomeScreen> {
+  bool _isSigningIn = false;
+  String? _message;
+  String? _messageDetail;
+
+  Future<void> _signInWithGoogle() async {
+    setState(() {
+      _isSigningIn = true;
+      _message = null;
+      _messageDetail = null;
+    });
+    try {
+      await widget.controller.signInWithGoogle();
+      // Beri waktu event status login tiba; kalau berhasil, gerbang akan
+      // otomatis memindahkan pengguna ke beranda dan layar ini dilepas.
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+      if (!mounted) return;
+      if (widget.controller.currentUser == null) {
+        setState(() {
+          _message =
+              'Login dibatalkan. Coba lagi, atau lanjutkan sebagai tamu.';
+        });
+      }
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _message =
+            'Login Google gagal. Periksa koneksi internet lalu coba lagi.';
+        _messageDetail = '$error';
+      });
+    } finally {
+      if (mounted) setState(() => _isSigningIn = false);
+    }
+  }
+
+  Future<void> _continueAsGuest() => widget.controller.continueAsGuest();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final authConfigured = widget.controller.authRepository != null;
+
+    return Scaffold(
+      body: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              scheme.primaryContainer.withValues(alpha: 0.45),
+              scheme.surface,
+            ],
+            stops: const [0, 0.6],
+          ),
+        ),
+        child: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: TweenAnimationBuilder<double>(
+                  tween: Tween(begin: 0, end: 1),
+                  duration: const Duration(milliseconds: 700),
+                  curve: Curves.easeOutCubic,
+                  builder: (context, value, child) => Opacity(
+                    opacity: value,
+                    child: Transform.translate(
+                      offset: Offset(0, 18 * (1 - value)),
+                      child: child,
+                    ),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 84,
+                          height: 84,
+                          decoration: BoxDecoration(
+                            color: scheme.primary,
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                          child: Icon(
+                            Icons.menu_book_rounded,
+                            size: 44,
+                            color: scheme.onPrimary,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 22),
+                      Text(
+                        'Horas',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          color: scheme.primary,
+                          letterSpacing: 1.2,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Selamat datang!',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.headlineMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        'Cari arti kata, simpan pilihanmu, lalu latih '
+                        'ingatan lewat kuis Bahasa Batak Toba.',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.bodyLarge?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: 32),
+                      OutlinedButton(
+                        onPressed: authConfigured && !_isSigningIn
+                            ? _signInWithGoogle
+                            : null,
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(52),
+                          backgroundColor: scheme.surface,
+                          foregroundColor: scheme.onSurface,
+                          side: BorderSide(color: scheme.outline),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            if (_isSigningIn)
+                              const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            else
+                              SvgPicture.string(
+                                _googleLogoSvg,
+                                width: 20,
+                                height: 20,
+                              ),
+                            const SizedBox(width: 12),
+                            const Text('Login with Google'),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      FilledButton.icon(
+                        onPressed: _isSigningIn ? null : _continueAsGuest,
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size.fromHeight(52),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        icon: const Icon(Icons.person_outline_rounded),
+                        label: const Text('Continue as Guest'),
+                      ),
+                      if (_message != null) ...[
+                        const SizedBox(height: 16),
+                        Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: scheme.errorContainer,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _message!,
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  color: scheme.onErrorContainer,
+                                ),
+                              ),
+                              if (_messageDetail != null) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  _messageDetail!,
+                                  maxLines: 3,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: scheme.onErrorContainer,
+                                  ),
+                                ),
+                              ],
+                              const SizedBox(height: 4),
+                              TextButton(
+                                onPressed: _isSigningIn
+                                    ? null
+                                    : _signInWithGoogle,
+                                style: TextButton.styleFrom(
+                                  foregroundColor: scheme.onErrorContainer,
+                                  padding: EdgeInsets.zero,
+                                  minimumSize: const Size(0, 36),
+                                ),
+                                child: const Text('Coba lagi'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 20),
+                      Text(
+                        authConfigured
+                            ? 'Sebagai tamu, progresmu tersimpan di perangkat '
+                                  'ini. Masuk dengan Google untuk menyimpannya '
+                                  'di akunmu.'
+                            : 'Login Google belum tersedia di versi ini. Kamu '
+                                  'tetap bisa belajar sebagai tamu.',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _AppShell extends StatefulWidget {
-  const _AppShell({required this.controller});
+  const _AppShell({super.key, required this.controller});
 
   final AppController controller;
 
@@ -598,12 +1011,6 @@ class _AppShellState extends State<_AppShell> {
   int _dictionaryEpoch = 0;
   _PracticeMode _initialPracticeMode = _PracticeMode.quiz;
   int _practiceEpoch = 0;
-
-  @override
-  void dispose() {
-    widget.controller.dispose();
-    super.dispose();
-  }
 
   void _openDictionary([String query = '']) {
     setState(() {
@@ -1201,10 +1608,8 @@ class _DictionaryScreenState extends State<_DictionaryScreen> {
 
   // Pencarian hanya dijalankan saat kata kunci/filter berubah, bukan setiap
   // build, sehingga menyimpan kata atau berpindah tab tidak menyaring ulang.
-  List<DictionaryEntry> _runSearch() => widget.controller.index.search(
-    _query,
-    partOfSpeech: _partOfSpeech,
-  );
+  List<DictionaryEntry> _runSearch() =>
+      widget.controller.index.search(_query, partOfSpeech: _partOfSpeech);
 
   void _onQueryChanged(String value) {
     setState(() {
@@ -1558,9 +1963,10 @@ class _PracticeScreenState extends State<_PracticeScreen> {
   final List<int> _arrangedSentenceTokenIndices = [];
   bool? _sentenceIsCorrect;
   int _questionIndex = 0;
-  int _correctAnswers = 0;
-  String? _selectedAnswer;
-  bool _quizFinished = false;
+  int _finalCorrect = 0;
+  late List<String?> _answers;
+  _QuizPhase _quizPhase = _QuizPhase.intro;
+  bool _quizGaveUp = false;
   bool _savingQuiz = false;
   String? _quizSaveError;
 
@@ -1569,6 +1975,7 @@ class _PracticeScreenState extends State<_PracticeScreen> {
     super.initState();
     _mode = widget.initialMode;
     _questions = _createQuizQuestions(widget.controller.index);
+    _answers = List<String?>.filled(_questions.length, null);
     _startSentenceExercise();
   }
 
@@ -1576,18 +1983,11 @@ class _PracticeScreenState extends State<_PracticeScreen> {
     if (mode == _mode) return;
     setState(() {
       _mode = mode;
-      if (mode == _PracticeMode.quiz) _restartQuiz();
+      if (mode == _PracticeMode.quiz && _quizPhase == _QuizPhase.finished) {
+        _restartQuiz();
+      }
       if (mode == _PracticeMode.sentences) _startSentenceExercise();
     });
-  }
-
-  void _restartQuiz() {
-    _questions = _createQuizQuestions(widget.controller.index);
-    _questionIndex = 0;
-    _correctAnswers = 0;
-    _selectedAnswer = null;
-    _quizFinished = false;
-    _quizSaveError = null;
   }
 
   void _startSentenceExercise() {
@@ -1603,33 +2003,92 @@ class _PracticeScreenState extends State<_PracticeScreen> {
     _sentenceIsCorrect = null;
   }
 
-  Future<void> _continueQuiz() async {
-    final selected = _selectedAnswer;
-    if (selected == null || _savingQuiz || _quizFinished) return;
+  void _restartQuiz() {
+    _questions = _createQuizQuestions(widget.controller.index);
+    _answers = List<String?>.filled(_questions.length, null);
+    _questionIndex = 0;
+    _finalCorrect = 0;
+    _quizGaveUp = false;
+    _quizPhase = _QuizPhase.intro;
+    _quizSaveError = null;
+  }
 
-    final question = _questions[_questionIndex];
-    final nextCorrect =
-        _correctAnswers + (selected == question.correctDefinition ? 1 : 0);
-    if (_questionIndex < _questions.length - 1) {
-      setState(() {
-        _correctAnswers = nextCorrect;
-        _questionIndex++;
-        _selectedAnswer = null;
-      });
+  int get _answeredCount => _answers.where((a) => a != null).length;
+
+  void _startQuiz() {
+    setState(() {
+      _questionIndex = 0;
+      _quizPhase = _QuizPhase.running;
+    });
+  }
+
+  void _goToQuestion(int index) {
+    if (index < 0 || index >= _questions.length || _savingQuiz) return;
+    setState(() => _questionIndex = index);
+  }
+
+  void _selectAnswer(String option) {
+    if (_savingQuiz) return;
+    setState(() => _answers[_questionIndex] = option);
+  }
+
+  Future<void> _confirmEndQuiz({required bool giveUp}) async {
+    final total = _questions.length;
+    final answered = _answeredCount;
+    final unanswered = total - answered;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(giveUp ? 'Menyerah?' : 'Akhiri kuis?'),
+        content: Text(
+          [
+            'Kamu sudah menjawab $answered dari $total soal.',
+            if (unanswered > 0)
+              '$unanswered soal belum dijawab dan akan dihitung salah.',
+            'Setelah kuis diakhiri, kamu tidak bisa melanjutkan lagi.',
+          ].join('\n\n'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Lanjutkan kuis'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(giveUp ? 'Ya, menyerah' : 'Akhiri kuis'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await _finishQuiz(giveUp: giveUp);
+  }
+
+  Future<void> _finishQuiz({required bool giveUp}) async {
+    if (_savingQuiz || _quizPhase != _QuizPhase.running) return;
+    var correct = 0;
+    for (var i = 0; i < _questions.length; i++) {
+      if (_answers[i] == _questions[i].correctDefinition) correct++;
+    }
+
+    // Menyerah tanpa menjawab satu soal pun tidak dicatat sebagai kuis selesai.
+    if (giveUp && _answeredCount == 0) {
+      setState(_restartQuiz);
       return;
     }
 
     setState(() {
-      _correctAnswers = nextCorrect;
       _savingQuiz = true;
       _quizSaveError = null;
     });
     try {
-      await widget.controller.recordQuiz(nextCorrect, _questions.length);
+      await widget.controller.recordQuiz(correct, _questions.length);
       if (!mounted) return;
       setState(() {
         _savingQuiz = false;
-        _quizFinished = true;
+        _finalCorrect = correct;
+        _quizGaveUp = giveUp;
+        _quizPhase = _QuizPhase.finished;
       });
     } catch (error) {
       if (!mounted) return;
@@ -1693,36 +2152,6 @@ class _PracticeScreenState extends State<_PracticeScreen> {
   }
 
   Widget _buildQuiz(ThemeData theme) {
-    if (_quizFinished) {
-      return Center(
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.task_alt_rounded,
-                size: 52,
-                color: theme.colorScheme.primary,
-              ),
-              const SizedBox(height: 16),
-              Text('Kuis selesai', style: theme.textTheme.headlineSmall),
-              const SizedBox(height: 8),
-              Text(
-                'Jawaban tepat: $_correctAnswers dari ${_questions.length}',
-                style: theme.textTheme.bodyLarge,
-              ),
-              const SizedBox(height: 18),
-              FilledButton.icon(
-                onPressed: () => setState(_restartQuiz),
-                icon: const Icon(Icons.refresh_rounded),
-                label: const Text('Coba kuis lagi'),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
     if (_questions.isEmpty) {
       return const _EmptyState(
         icon: Icons.quiz_outlined,
@@ -1730,10 +2159,177 @@ class _PracticeScreenState extends State<_PracticeScreen> {
         message: 'Kamus belum memiliki cukup entri untuk membuat kuis.',
       );
     }
+    switch (_quizPhase) {
+      case _QuizPhase.intro:
+        return _buildQuizIntro(theme);
+      case _QuizPhase.running:
+        return _buildQuizRunning(theme);
+      case _QuizPhase.finished:
+        return _buildQuizResult(theme);
+    }
+  }
 
+  Widget _buildQuizIntro(ThemeData theme) {
+    final instructions = [
+      'Pilih padanan Indonesia yang tepat untuk setiap kata Batak.',
+      'Kamu bebas pindah ke nomor soal mana pun, melewati soal sulit, lalu kembali lagi nanti.',
+      'Jawaban bisa diubah kapan saja sebelum kuis diakhiri.',
+      'Soal yang belum dijawab dihitung salah saat kuis diakhiri.',
+    ];
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.only(bottom: 20),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(22),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                Icons.quiz_outlined,
+                size: 40,
+                color: theme.colorScheme.primary,
+              ),
+              const SizedBox(height: 14),
+              Text('Kuis kosakata', style: theme.textTheme.headlineSmall),
+              const SizedBox(height: 6),
+              Text(
+                '${_questions.length} soal pilihan ganda · Batak Toba',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+              const SizedBox(height: 18),
+              Text('Petunjuk', style: theme.textTheme.titleMedium),
+              const SizedBox(height: 8),
+              for (final line in instructions)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Icon(
+                          Icons.check_rounded,
+                          size: 18,
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(line)),
+                    ],
+                  ),
+                ),
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _startQuiz,
+                  icon: const Icon(Icons.play_arrow_rounded),
+                  label: const Text('Mulai Kuis'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQuestionNumber(ThemeData theme, int index) {
+    final isCurrent = index == _questionIndex;
+    final isAnswered = _answers[index] != null;
+    final scheme = theme.colorScheme;
+    final background = isCurrent
+        ? scheme.primary
+        : isAnswered
+        ? scheme.secondaryContainer
+        : scheme.surfaceContainerLow;
+    final foreground = isCurrent
+        ? scheme.onPrimary
+        : isAnswered
+        ? scheme.onSecondaryContainer
+        : scheme.onSurfaceVariant;
+    final borderColor = isCurrent || isAnswered
+        ? scheme.primary
+        : scheme.outlineVariant;
+    final status = isCurrent
+        ? 'sedang dibuka'
+        : isAnswered
+        ? 'sudah dijawab'
+        : 'belum dijawab';
+    return Semantics(
+      button: true,
+      selected: isCurrent,
+      label: 'Soal ${index + 1}, $status',
+      child: Material(
+        color: background,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () => _goToQuestion(index),
+          child: Container(
+            width: 42,
+            height: 42,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              border: Border.all(color: borderColor, width: isCurrent ? 2 : 1),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              '${index + 1}',
+              style: theme.textTheme.labelLarge?.copyWith(
+                color: foreground,
+                fontWeight: isCurrent ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLegendItem(
+    ThemeData theme,
+    Color fill,
+    Color border,
+    String text,
+  ) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 14,
+          height: 14,
+          decoration: BoxDecoration(
+            color: fill,
+            border: Border.all(color: border),
+            borderRadius: BorderRadius.circular(4),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          text,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildQuizRunning(ThemeData theme) {
+    final scheme = theme.colorScheme;
     final question = _questions[_questionIndex];
-    final selected = _selectedAnswer;
-    final hasAnswered = selected != null;
+    final selected = _answers[_questionIndex];
+    final total = _questions.length;
+    final answered = _answeredCount;
+    final isLast = _questionIndex == total - 1;
 
     return ListView(
       padding: const EdgeInsets.only(bottom: 20),
@@ -1747,19 +2343,68 @@ class _PracticeScreenState extends State<_PracticeScreen> {
               ),
             ),
             Text(
-              '${_questionIndex + 1} / ${_questions.length}',
+              'Soal ${_questionIndex + 1} / $total',
               style: theme.textTheme.labelLarge?.copyWith(
-                color: theme.colorScheme.primary,
+                color: scheme.primary,
               ),
             ),
           ],
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 10),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(99),
+          child: LinearProgressIndicator(
+            value: answered / total,
+            minHeight: 8,
+            backgroundColor: scheme.surfaceContainerHighest,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          '$answered dari $total soal dijawab',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: scheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (var i = 0; i < total; i++) _buildQuestionNumber(theme, i),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 14,
+          runSpacing: 6,
+          children: [
+            _buildLegendItem(
+              theme,
+              scheme.primary,
+              scheme.primary,
+              'Sedang dibuka',
+            ),
+            _buildLegendItem(
+              theme,
+              scheme.secondaryContainer,
+              scheme.primary,
+              'Sudah dijawab',
+            ),
+            _buildLegendItem(
+              theme,
+              scheme.surfaceContainerLow,
+              scheme.outlineVariant,
+              'Belum dijawab',
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
         Container(
           width: double.infinity,
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerLow,
+            color: scheme.surfaceContainerLow,
             borderRadius: BorderRadius.circular(16),
           ),
           child: Column(
@@ -1768,7 +2413,7 @@ class _PracticeScreenState extends State<_PracticeScreen> {
               Text(
                 question.answer.partOfSpeechLabel,
                 style: theme.textTheme.labelMedium?.copyWith(
-                  color: theme.colorScheme.primary,
+                  color: scheme.primary,
                 ),
               ),
               const SizedBox(height: 8),
@@ -1784,14 +2429,7 @@ class _PracticeScreenState extends State<_PracticeScreen> {
         const SizedBox(height: 16),
         ...question.options.map((option) {
           final isSelected = option == selected;
-          final isCorrect = option == question.correctDefinition;
-          final showCorrect = hasAnswered && isCorrect;
-          final showIncorrect = hasAnswered && isSelected && !isCorrect;
-          final color = showCorrect
-              ? theme.colorScheme.primary
-              : showIncorrect
-              ? theme.colorScheme.error
-              : theme.colorScheme.outlineVariant;
+          final color = isSelected ? scheme.primary : scheme.outlineVariant;
           return Padding(
             padding: const EdgeInsets.only(bottom: 9),
             child: Semantics(
@@ -1800,13 +2438,11 @@ class _PracticeScreenState extends State<_PracticeScreen> {
               label: option,
               child: Material(
                 color: isSelected
-                    ? theme.colorScheme.secondaryContainer
-                    : theme.colorScheme.surfaceContainerLow,
+                    ? scheme.secondaryContainer
+                    : scheme.surfaceContainerLow,
                 borderRadius: BorderRadius.circular(12),
                 child: InkWell(
-                  onTap: hasAnswered
-                      ? null
-                      : () => setState(() => _selectedAnswer = option),
+                  onTap: () => _selectAnswer(option),
                   borderRadius: BorderRadius.circular(12),
                   child: Container(
                     width: double.infinity,
@@ -1817,18 +2453,14 @@ class _PracticeScreenState extends State<_PracticeScreen> {
                     decoration: BoxDecoration(
                       border: Border.all(
                         color: color,
-                        width: isSelected || showCorrect ? 2 : 1,
+                        width: isSelected ? 2 : 1,
                       ),
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Row(
                       children: [
                         Icon(
-                          showCorrect
-                              ? Icons.check_circle_rounded
-                              : showIncorrect
-                              ? Icons.cancel_rounded
-                              : isSelected
+                          isSelected
                               ? Icons.radio_button_checked_rounded
                               : Icons.radio_button_unchecked_rounded,
                           color: color,
@@ -1844,42 +2476,218 @@ class _PracticeScreenState extends State<_PracticeScreen> {
             ),
           );
         }),
-        if (hasAnswered) ...[
+        if (_quizSaveError != null) ...[
           const SizedBox(height: 4),
-          Text(
-            selected == question.correctDefinition
-                ? 'Benar. Padanan mengikuti data kamus.'
-                : 'Padanan dalam kamus: ${question.correctDefinition}',
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: selected == question.correctDefinition
-                  ? theme.colorScheme.primary
-                  : theme.colorScheme.error,
+          Text(_quizSaveError!, style: TextStyle(color: scheme.error)),
+        ],
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: _questionIndex == 0 || _savingQuiz
+                    ? null
+                    : () => _goToQuestion(_questionIndex - 1),
+                icon: const Icon(Icons.chevron_left_rounded),
+                label: const Text('Soal Sebelumnya'),
+              ),
             ),
-          ),
-          if (_quizSaveError != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              _quizSaveError!,
-              style: TextStyle(color: theme.colorScheme.error),
+            const SizedBox(width: 10),
+            Expanded(
+              child: isLast
+                  ? FilledButton.icon(
+                      onPressed: _savingQuiz
+                          ? null
+                          : () => _confirmEndQuiz(giveUp: false),
+                      icon: _savingQuiz
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.flag_rounded),
+                      label: const Text('Akhiri Kuis'),
+                    )
+                  : FilledButton.icon(
+                      onPressed: _savingQuiz
+                          ? null
+                          : () => _goToQuestion(_questionIndex + 1),
+                      icon: const Icon(Icons.chevron_right_rounded),
+                      iconAlignment: IconAlignment.end,
+                      label: const Text('Soal Berikutnya'),
+                    ),
             ),
           ],
-          const SizedBox(height: 14),
-          FilledButton(
-            onPressed: _savingQuiz ? null : _continueQuiz,
-            child: _savingQuiz
-                ? const SizedBox(
-                    width: 19,
-                    height: 19,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : Text(
-                    _questionIndex == _questions.length - 1
-                        ? 'Selesaikan kuis'
-                        : 'Soal berikutnya',
+        ),
+        const SizedBox(height: 8),
+        Center(
+          child: TextButton.icon(
+            onPressed: _savingQuiz ? null : () => _confirmEndQuiz(giveUp: true),
+            style: TextButton.styleFrom(foregroundColor: scheme.error),
+            icon: const Icon(Icons.outlined_flag_rounded),
+            label: const Text('Menyerah'),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildResultStat(
+    ThemeData theme,
+    String label,
+    int value,
+    Color color,
+  ) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerLow,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Column(
+          children: [
+            Text(
+              '$value',
+              style: theme.textTheme.headlineSmall?.copyWith(
+                color: color,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQuizResult(ThemeData theme) {
+    final scheme = theme.colorScheme;
+    final total = _questions.length;
+    final correct = _finalCorrect;
+    final unanswered = _answers.where((a) => a == null).length;
+    final wrong = total - correct - unanswered;
+    final score = total == 0 ? 0 : (correct * 100 / total).round();
+
+    return ListView(
+      padding: const EdgeInsets.only(bottom: 20),
+      children: [
+        const SizedBox(height: 4),
+        Center(
+          child: Icon(
+            _quizGaveUp ? Icons.flag_rounded : Icons.task_alt_rounded,
+            size: 52,
+            color: scheme.primary,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Center(
+          child: Text(
+            _quizGaveUp ? 'Kuis diakhiri' : 'Kuis selesai',
+            style: theme.textTheme.headlineSmall,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Center(
+          child: Text(
+            'Skor $score · Jawaban tepat: $correct dari $total',
+            style: theme.textTheme.bodyLarge,
+          ),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            _buildResultStat(theme, 'Benar', correct, scheme.primary),
+            const SizedBox(width: 10),
+            _buildResultStat(theme, 'Salah', wrong, scheme.error),
+            const SizedBox(width: 10),
+            _buildResultStat(
+              theme,
+              'Belum dijawab',
+              unanswered,
+              scheme.onSurfaceVariant,
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        Text('Tinjau jawaban', style: theme.textTheme.titleMedium),
+        const SizedBox(height: 10),
+        for (var i = 0; i < total; i++) _buildReviewTile(theme, i),
+        const SizedBox(height: 8),
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton.icon(
+            onPressed: () => setState(_restartQuiz),
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('Coba kuis lagi'),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildReviewTile(ThemeData theme, int index) {
+    final scheme = theme.colorScheme;
+    final question = _questions[index];
+    final chosen = _answers[index];
+    final isCorrect = chosen == question.correctDefinition;
+    final isUnanswered = chosen == null;
+    final color = isCorrect
+        ? scheme.primary
+        : isUnanswered
+        ? scheme.onSurfaceVariant
+        : scheme.error;
+    final icon = isCorrect
+        ? Icons.check_circle_rounded
+        : isUnanswered
+        ? Icons.remove_circle_outline_rounded
+        : Icons.cancel_rounded;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 9),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: color, size: 22),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${index + 1}. ${question.answer.headword}',
+                  style: theme.textTheme.titleSmall,
+                ),
+                const SizedBox(height: 4),
+                if (isUnanswered)
+                  Text('Belum dijawab', style: TextStyle(color: color))
+                else if (!isCorrect)
+                  Text('Jawabanmu: $chosen', style: TextStyle(color: color)),
+                if (!isCorrect)
+                  Text('Padanan kamus: ${question.correctDefinition}'),
+                if (isCorrect)
+                  Text(
+                    question.correctDefinition,
+                    style: TextStyle(color: color),
                   ),
+              ],
+            ),
           ),
         ],
-      ],
+      ),
     );
   }
 
@@ -2105,7 +2913,178 @@ List<_QuizQuestion> _createQuizQuestions(DictionaryIndex index) {
       .toList(growable: false);
 }
 
-class _ProfileScreen extends StatelessWidget {
+class _LocalProfile {
+  const _LocalProfile({this.name, this.photo});
+
+  final String? name;
+  final Uint8List? photo;
+}
+
+/// Nama tampilan dan foto profil yang diubah pengguna, disimpan di perangkat
+/// (SharedPreferences) per akun: kunci `guest` untuk tamu, uid untuk akun.
+class _LocalProfileStore {
+  const _LocalProfileStore._();
+
+  static String _nameKey(String id) => 'horas.profile.$id.name';
+  static String _photoKey(String id) => 'horas.profile.$id.photo';
+
+  static Future<_LocalProfile> load(String id) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final encoded = prefs.getString(_photoKey(id));
+      return _LocalProfile(
+        name: prefs.getString(_nameKey(id)),
+        photo: encoded == null ? null : base64Decode(encoded),
+      );
+    } catch (_) {
+      return const _LocalProfile();
+    }
+  }
+
+  static Future<void> saveName(String id, String? name) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (name == null || name.isEmpty) {
+      await prefs.remove(_nameKey(id));
+    } else {
+      await prefs.setString(_nameKey(id), name);
+    }
+  }
+
+  static Future<void> savePhoto(String id, Uint8List? bytes) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (bytes == null) {
+      await prefs.remove(_photoKey(id));
+    } else {
+      final saved = await prefs.setString(_photoKey(id), base64Encode(bytes));
+      if (!saved) throw StateError('Penyimpanan perangkat menolak foto ini.');
+    }
+  }
+}
+
+class _ProfileAvatar extends StatelessWidget {
+  const _ProfileAvatar({
+    required this.size,
+    required this.photo,
+    required this.photoUrl,
+  });
+
+  final double size;
+  final Uint8List? photo;
+  final String? photoUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final fallback = Container(
+      width: size,
+      height: size,
+      color: scheme.primaryContainer,
+      alignment: Alignment.center,
+      child: Icon(
+        Icons.person_rounded,
+        size: size * 0.55,
+        color: scheme.onPrimaryContainer,
+      ),
+    );
+    final Widget image;
+    if (photo != null) {
+      image = Image.memory(
+        photo!,
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+        errorBuilder: (_, _, _) => fallback,
+      );
+    } else if (photoUrl != null && photoUrl!.isNotEmpty) {
+      image = Image.network(
+        photoUrl!,
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) => fallback,
+      );
+    } else {
+      image = fallback;
+    }
+    return ClipOval(child: image);
+  }
+}
+
+/// Dialog edit nama. Memegang [TextEditingController] sendiri agar dibuang
+/// dengan aman. Mengembalikan teks nama ('' berarti pakai nama bawaan),
+/// atau null kalau dibatalkan.
+class _EditProfileDialog extends StatefulWidget {
+  const _EditProfileDialog({required this.initialName, this.email});
+
+  final String initialName;
+  final String? email;
+
+  @override
+  State<_EditProfileDialog> createState() => _EditProfileDialogState();
+}
+
+class _EditProfileDialogState extends State<_EditProfileDialog> {
+  late final TextEditingController _nameController = TextEditingController(
+    text: widget.initialName,
+  );
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  void _submit() => Navigator.of(context).pop(_nameController.text.trim());
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AlertDialog(
+      title: const Text('Edit profil'),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _nameController,
+              autofocus: true,
+              maxLength: 40,
+              textCapitalization: TextCapitalization.words,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _submit(),
+              decoration: const InputDecoration(
+                labelText: 'Nama tampilan',
+                helperText: 'Kosongkan untuk memakai nama bawaan.',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            if (widget.email != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                'Email: ${widget.email} (dari akun Google, tidak bisa diubah)',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Batal'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Simpan')),
+      ],
+    );
+  }
+}
+
+class _ProfileScreen extends StatefulWidget {
   const _ProfileScreen({
     required this.controller,
     required this.onOpenDictionary,
@@ -2113,6 +3092,319 @@ class _ProfileScreen extends StatelessWidget {
 
   final AppController controller;
   final ValueChanged<String> onOpenDictionary;
+
+  @override
+  State<_ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<_ProfileScreen> {
+  bool _photoBusy = false;
+
+  AppController get controller => widget.controller;
+
+  void _toast(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _showPhotoOptions() async {
+    final scheme = Theme.of(context).colorScheme;
+    final hasPhoto = controller.profilePhoto != null;
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Ganti Foto'),
+              subtitle: const Text('Pilih dari galeri'),
+              onTap: () => Navigator.of(context).pop('gallery'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_camera_outlined),
+              title: const Text('Ambil Foto'),
+              subtitle: const Text('Buka kamera'),
+              onTap: () => Navigator.of(context).pop('camera'),
+            ),
+            if (hasPhoto)
+              ListTile(
+                leading: Icon(
+                  Icons.delete_outline_rounded,
+                  color: scheme.error,
+                ),
+                title: Text(
+                  'Hapus Foto',
+                  style: TextStyle(color: scheme.error),
+                ),
+                onTap: () => Navigator.of(context).pop('remove'),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (!mounted) return;
+    switch (action) {
+      case 'gallery':
+        await _pickPhoto(ImageSource.gallery);
+      case 'camera':
+        await _pickPhoto(ImageSource.camera);
+      case 'remove':
+        await _removePhoto();
+    }
+  }
+
+  Future<void> _pickPhoto(ImageSource source) async {
+    if (_photoBusy) return;
+    setState(() => _photoBusy = true);
+    Uint8List? bytes;
+    try {
+      final picked = await ImagePicker().pickImage(
+        source: source,
+        maxWidth: 512,
+        maxHeight: 512,
+        imageQuality: 85,
+      );
+      if (picked != null) bytes = await picked.readAsBytes();
+    } on PlatformException catch (error) {
+      final fromCamera = source == ImageSource.camera;
+      if (error.code == 'camera_access_denied') {
+        _toast(
+          'Izin kamera ditolak. Aktifkan izin kamera di pengaturan perangkat.',
+        );
+      } else if (error.code == 'photo_access_denied') {
+        _toast(
+          'Izin galeri ditolak. Aktifkan izin foto di pengaturan perangkat.',
+        );
+      } else {
+        _toast(
+          fromCamera
+              ? 'Kamera tidak dapat dibuka di perangkat ini.'
+              : 'Galeri tidak dapat dibuka. Coba lagi.',
+        );
+      }
+    } catch (_) {
+      _toast(
+        source == ImageSource.camera
+            ? 'Kamera tidak dapat dibuka di perangkat ini.'
+            : 'Galeri tidak dapat dibuka. Coba lagi.',
+      );
+    }
+    if (!mounted) return;
+    setState(() => _photoBusy = false);
+    if (bytes == null) return; // dibatalkan atau gagal (pesan sudah tampil)
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Pratinjau foto'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ClipOval(
+              child: Image.memory(
+                bytes!,
+                width: 180,
+                height: 180,
+                fit: BoxFit.cover,
+              ),
+            ),
+            const SizedBox(height: 14),
+            const Text('Pakai foto ini sebagai foto profilmu?'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Batal'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Simpan'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _photoBusy = true);
+    try {
+      await controller.setProfilePhoto(bytes);
+      _toast('Foto profil diperbarui.');
+    } catch (error) {
+      _toast('Foto belum tersimpan: $error');
+    } finally {
+      if (mounted) setState(() => _photoBusy = false);
+    }
+  }
+
+  Future<void> _removePhoto() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Hapus foto profil?'),
+        content: const Text('Foto akan diganti dengan foto bawaan.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Batal'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Hapus'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _photoBusy = true);
+    try {
+      await controller.setProfilePhoto(null);
+      _toast('Foto profil dihapus.');
+    } catch (error) {
+      _toast('Foto belum terhapus: $error');
+    } finally {
+      if (mounted) setState(() => _photoBusy = false);
+    }
+  }
+
+  Future<void> _editProfile() async {
+    final user = controller.currentUser;
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => _EditProfileDialog(
+        initialName: controller.profileNameOverride ?? '',
+        email: controller.userProfile?.email ?? user?.email,
+      ),
+    );
+    if (result == null || !mounted) return;
+    try {
+      await controller.setProfileName(result);
+      _toast('Profil diperbarui.');
+    } catch (error) {
+      _toast('Profil belum tersimpan: $error');
+    }
+  }
+
+  Future<void> _confirmLogout() async {
+    final isGuest = controller.currentUser == null;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(isGuest ? 'Keluar dari mode tamu?' : 'Keluar dari akun?'),
+        content: Text(
+          isGuest
+              ? 'Progres tamu tetap tersimpan di perangkat ini. Kamu akan '
+                    'kembali ke halaman login.'
+              : 'Kamu bisa masuk lagi kapan saja dengan akun Google yang sama.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Batal'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Keluar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      if (isGuest) {
+        await controller.leaveGuestSession();
+      } else {
+        await controller.signOut();
+      }
+    } catch (error) {
+      _toast('Tidak dapat keluar: $error');
+    }
+  }
+
+  Widget _buildStat(ThemeData theme, String value, String label) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerLow,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Column(
+          children: [
+            Text(
+              value,
+              style: theme.textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMenuGroup(ThemeData theme, String title, List<Widget> tiles) {
+    final scheme = theme.colorScheme;
+    final children = <Widget>[];
+    for (var i = 0; i < tiles.length; i++) {
+      if (i > 0)
+        children.add(
+          Divider(height: 1, indent: 56, color: scheme.outlineVariant),
+        );
+      children.add(tiles[i]);
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 8),
+          child: Text(
+            title,
+            style: theme.textTheme.labelLarge?.copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+        Container(
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Column(children: children),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMenuTile({
+    required IconData icon,
+    required String title,
+    String? subtitle,
+    required VoidCallback onTap,
+    Color? color,
+  }) {
+    return ListTile(
+      leading: Icon(icon, color: color),
+      title: Text(title, style: TextStyle(color: color)),
+      subtitle: subtitle == null ? null : Text(subtitle),
+      trailing: Icon(Icons.chevron_right_rounded, color: color),
+      onTap: onTap,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2125,149 +3417,204 @@ class _ProfileScreen extends StatelessWidget {
         : '${(stats.accuracy * 100).round()}%';
     final user = controller.currentUser;
     final authConfigured = controller.authRepository != null;
+    final email = controller.userProfile?.email ?? user?.email;
+    final photoUrl = controller.userProfile?.photoUrl ?? user?.photoUrl;
+    final errors = <String>[
+      if (controller.authError != null)
+        'Status autentikasi tidak dapat dimuat: ${controller.authError}',
+      if (controller.profileError != null)
+        'Profil Firebase belum tersimpan: ${controller.profileError}',
+      if (controller.progressError != null)
+        'Progres belum tersinkronisasi: ${controller.progressError}',
+    ];
 
     return SafeArea(
       child: Align(
         alignment: Alignment.topCenter,
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 760),
+          constraints: const BoxConstraints(maxWidth: 560),
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
+            padding: const EdgeInsets.fromLTRB(20, 24, 20, 28),
             children: [
-              Text('Profil belajar', style: theme.textTheme.headlineSmall),
-              const SizedBox(height: 6),
-              Text(
-                'Kelola akun dan lihat perjalanan belajarmu.',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 20),
-              Container(
-                padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(
-                  color: scheme.surfaceContainerLow,
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      user == null ? 'AKUN BELUM AKTIF' : 'AKUN TERSAMBUNG',
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        color: user == null ? scheme.secondary : scheme.primary,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      controller.userProfile?.displayName ??
-                          user?.displayName ??
-                          'Belajar di perangkat ini',
-                      style: theme.textTheme.titleLarge,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      controller.userProfile?.email ??
-                          user?.email ??
-                          'Masuk untuk menyiapkan sinkronisasi progres.',
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    if (user == null)
-                      FilledButton.icon(
-                        onPressed: () => Navigator.of(context).push<void>(
-                          MaterialPageRoute(
-                            builder: (_) =>
-                                _LoginScreen(controller: controller),
+              Center(
+                child: Semantics(
+                  button: true,
+                  label: 'Ubah foto profil',
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: _photoBusy ? null : _showPhotoOptions,
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        _ProfileAvatar(
+                          size: 96,
+                          photo: controller.profilePhoto,
+                          photoUrl: photoUrl,
+                        ),
+                        if (_photoBusy)
+                          Positioned.fill(
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: scheme.surface.withValues(alpha: 0.6),
+                              ),
+                              child: const Center(
+                                child: SizedBox(
+                                  width: 26,
+                                  height: 26,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.5,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        Positioned(
+                          right: -2,
+                          bottom: -2,
+                          child: Container(
+                            padding: const EdgeInsets.all(7),
+                            decoration: BoxDecoration(
+                              color: scheme.primary,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: scheme.surface,
+                                width: 2,
+                              ),
+                            ),
+                            child: Icon(
+                              Icons.photo_camera_rounded,
+                              size: 16,
+                              color: scheme.onPrimary,
+                            ),
                           ),
                         ),
-                        icon: const Icon(Icons.login_rounded),
-                        label: const Text('Lihat opsi masuk'),
-                      )
-                    else
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Akun masuk melalui ${user.providerIds.join(', ')}.',
-                            style: theme.textTheme.bodySmall,
-                          ),
-                          if (authConfigured) ...[
-                            const SizedBox(height: 8),
-                            TextButton.icon(
-                              onPressed: () async {
-                                try {
-                                  await controller.signOut();
-                                } catch (error) {
-                                  if (!context.mounted) return;
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        'Tidak dapat keluar dari akun: $error',
-                                      ),
-                                    ),
-                                  );
-                                }
-                              },
-                              icon: const Icon(Icons.logout_rounded),
-                              label: const Text('Keluar dari akun'),
-                            ),
-                          ],
-                        ],
-                      ),
-                  ],
+                      ],
+                    ),
+                  ),
                 ),
               ),
-              if (controller.authError != null) ...[
-                const SizedBox(height: 10),
+              const SizedBox(height: 14),
+              Text(
+                controller.displayName,
+                textAlign: TextAlign.center,
+                style: theme.textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              if (email != null) ...[
+                const SizedBox(height: 2),
                 Text(
-                  'Status autentikasi tidak dapat dimuat: '
-                  '${controller.authError}',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: scheme.error,
+                  email,
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: scheme.onSurfaceVariant,
                   ),
                 ),
               ],
-              if (controller.profileError != null) ...[
-                const SizedBox(height: 8),
-                Text(
-                  'Profil Firebase belum tersimpan: '
-                  '${controller.profileError}',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: scheme.error,
+              const SizedBox(height: 10),
+              Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: user == null
+                        ? scheme.surfaceContainerHighest
+                        : scheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                  child: Text(
+                    user == null ? 'Tamu' : 'Akun Google',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: user == null
+                          ? scheme.onSurfaceVariant
+                          : scheme.onPrimaryContainer,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+              if (errors.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: scheme.errorContainer,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    errors.join('\n'),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: scheme.onErrorContainer,
+                    ),
                   ),
                 ),
               ],
-              if (controller.progressError != null) ...[
-                const SizedBox(height: 8),
-                Text(
-                  'Progres belum tersinkronisasi: '
-                  '${controller.progressError}',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: scheme.error,
-                  ),
-                ),
-              ],
-              const SizedBox(height: 24),
-              Text('Ringkasan belajar', style: theme.textTheme.titleLarge),
-              const SizedBox(height: 8),
-              _ProgressLine(
-                label: 'Kuis selesai',
-                value: '${stats.completedQuizzes}',
-              ),
-              _ProgressLine(
-                label: 'Jawaban benar',
-                value: '${stats.correctAnswers} / ${stats.answeredQuestions}',
-              ),
-              _ProgressLine(label: 'Akurasi latihan', value: accuracy),
-              _ProgressLine(
-                label: 'Kata tersimpan',
-                value: '${savedEntries.length}',
-              ),
               const SizedBox(height: 22),
+              Row(
+                children: [
+                  _buildStat(
+                    theme,
+                    '${stats.completedQuizzes}',
+                    'Kuis selesai',
+                  ),
+                  const SizedBox(width: 10),
+                  _buildStat(theme, accuracy, 'Akurasi'),
+                  const SizedBox(width: 10),
+                  _buildStat(theme, '${savedEntries.length}', 'Kata tersimpan'),
+                ],
+              ),
+              const SizedBox(height: 24),
+              _buildMenuGroup(theme, 'Akun', [
+                _buildMenuTile(
+                  icon: Icons.edit_outlined,
+                  title: 'Edit profil',
+                  subtitle: 'Ubah nama tampilan',
+                  onTap: _editProfile,
+                ),
+                if (user == null && authConfigured)
+                  _buildMenuTile(
+                    icon: Icons.login_rounded,
+                    title: 'Masuk dengan Google',
+                    subtitle: 'Simpan progres di akunmu',
+                    onTap: () => Navigator.of(context).push<void>(
+                      MaterialPageRoute(
+                        builder: (_) => _LoginScreen(controller: controller),
+                      ),
+                    ),
+                  ),
+              ]),
+              const SizedBox(height: 18),
+              _buildMenuGroup(theme, 'Lainnya', [
+                _buildMenuTile(
+                  icon: Icons.info_outline_rounded,
+                  title: 'Tentang Horas',
+                  onTap: () => showAboutDialog(
+                    context: context,
+                    applicationName: 'Horas',
+                    applicationIcon: Icon(
+                      Icons.menu_book_rounded,
+                      size: 36,
+                      color: scheme.primary,
+                    ),
+                    children: const [
+                      Text(
+                        'Aplikasi belajar Bahasa Batak Toba: kamus, kuis '
+                        'kosakata, dan latihan susun kalimat.',
+                      ),
+                    ],
+                  ),
+                ),
+                _buildMenuTile(
+                  icon: Icons.logout_rounded,
+                  title: user == null ? 'Keluar dari mode tamu' : 'Keluar',
+                  color: scheme.error,
+                  onTap: _confirmLogout,
+                ),
+              ]),
+              const SizedBox(height: 26),
               Row(
                 children: [
                   Expanded(
@@ -2291,7 +3638,7 @@ class _ProfileScreen extends StatelessWidget {
                   title: 'Belum ada kata tersimpan',
                   message: 'Simpan kata dari kamus, lalu kembali ke sini untuk mengulanginya.',
                   actionLabel: 'Buka kamus',
-                  onAction: () => onOpenDictionary(''),
+                  onAction: () => widget.onOpenDictionary(''),
                 )
               else
                 ...savedEntries.map(
@@ -2302,25 +3649,6 @@ class _ProfileScreen extends StatelessWidget {
                     onToggleSaved: () => controller.toggleSaved(entry),
                   ),
                 ),
-              const SizedBox(height: 18),
-              Text(
-                user != null && controller.progressRepository != null
-                    ? 'Kata tersimpan dan hasil kuis tersinkronisasi ke akunmu, dan tetap bisa dibuka tanpa internet.'
-                    : authConfigured
-                    ? 'Masuk dengan Google agar kata tersimpan dan hasil kuis tersimpan di akunmu. Sementara ini progres hanya ada di perangkat ini.'
-                    : 'Progres tersimpan di perangkat ini. Login Google dan sinkronisasi Firebase belum diaktifkan.',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Cloudflare Turnstile dapat membantu verifikasi anti-bot; '
-                'fitur itu bukan metode login.',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
             ],
           ),
         ),
@@ -2443,32 +3771,6 @@ class _LoginScreenState extends State<_LoginScreen> {
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _ProgressLine extends StatelessWidget {
-  const _ProgressLine({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 11),
-      child: Row(
-        children: [
-          Expanded(child: Text(label, style: theme.textTheme.bodyLarge)),
-          Text(
-            value,
-            style: theme.textTheme.titleMedium?.copyWith(
-              color: theme.colorScheme.primary,
-            ),
-          ),
-        ],
       ),
     );
   }
