@@ -46,6 +46,17 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Soal kuis (dibuat oleh tools/publish_quiz.py): terbuka untuk dibaca
+    // karena mode tamu juga bisa berlatih. Tulis hanya lewat Admin SDK.
+    match /quiz_meta/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /quiz_packs/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     // Koleksi hasil impor awal (satu dokumen per kata). Tidak dipakai aplikasi.
     match /dict_entries/{entryId} {
       allow read: if signedIn();
