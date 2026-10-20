@@ -4,8 +4,10 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -30,11 +32,21 @@ import 'data/user_profile_repository.dart';
 import 'services/learning_progress_store.dart';
 import 'services/quiz_builder.dart';
 
-const _paper = Color(0xFFF6F0E4);
-const _ink = Color(0xFF25231F);
-const _studyGreen = Color(0xFF315A53);
-const _marginRed = Color(0xFFA83D32);
-const _gold = Color(0xFFE5C76B);
+// Palet ulos: merah, hitam, putih, dengan emas sebagai aksen langka.
+// Semua netral diberi sedikit rona merah supaya tidak terasa abu-abu mati.
+const _paper = Color(0xFFF4F0EE);
+const _ink = Color(0xFF211A19);
+const _ulosRed = Color(0xFF8F2723);
+const _ulosBlack = Color(0xFF2A2121);
+const _gold = Color(0xFFD4A63A);
+const _goldDeep = Color(0xFF7A5C14);
+
+// Font web dimatikan di tes widget agar tes tidak mengunduh font.
+bool get _webFonts =>
+    !WidgetsBinding.instance.runtimeType.toString().contains('Test');
+
+TextStyle _display(TextStyle style) =>
+    _webFonts ? GoogleFonts.bricolageGrotesque(textStyle: style) : style;
 
 String _formatCount(int value) {
   return value.toString().replaceAllMapped(
@@ -115,35 +127,57 @@ ThemeData _buildTheme(Brightness brightness) {
   final isDark = brightness == Brightness.dark;
   final scheme =
       ColorScheme.fromSeed(
-        seedColor: _studyGreen,
+        seedColor: _ulosRed,
         brightness: brightness,
       ).copyWith(
-        primary: isDark ? const Color(0xFFA6C9BE) : _studyGreen,
-        onPrimary: isDark ? const Color(0xFF153B34) : Colors.white,
-        secondary: isDark ? const Color(0xFFE6A093) : _marginRed,
-        onSecondary: isDark ? const Color(0xFF4C150F) : Colors.white,
+        primary: isDark ? const Color(0xFFE8A59C) : _ulosRed,
+        onPrimary: isDark ? const Color(0xFF4A110E) : Colors.white,
+        secondary: isDark ? const Color(0xFFE2BF6A) : _goldDeep,
+        onSecondary: isDark ? const Color(0xFF3A2A00) : Colors.white,
         primaryContainer: isDark
-            ? const Color(0xFF34463F)
-            : const Color(0xFFDCE8E1),
+            ? const Color(0xFF4A2522)
+            : const Color(0xFFF1D9D5),
         onPrimaryContainer: isDark
-            ? const Color(0xFFE5F1EB)
-            : const Color(0xFF153B34),
-        surface: isDark ? const Color(0xFF1D211F) : _paper,
-        onSurface: isDark ? const Color(0xFFEAE5DB) : _ink,
+            ? const Color(0xFFFADCD7)
+            : const Color(0xFF4A110E),
+        surface: isDark ? const Color(0xFF181312) : _paper,
+        onSurface: isDark ? const Color(0xFFEDE6E3) : _ink,
+        onSurfaceVariant: isDark
+            ? const Color(0xFFC9BDB9)
+            : const Color(0xFF5E5250),
         surfaceContainerLow: isDark
-            ? const Color(0xFF252A27)
-            : const Color(0xFFFFFCF6),
+            ? const Color(0xFF211B1A)
+            : const Color(0xFFFBF9F8),
         surfaceContainerHighest: isDark
-            ? const Color(0xFF343A36)
-            : const Color(0xFFECE5D9),
-        outline: isDark ? const Color(0xFF858B84) : const Color(0xFF817D73),
+            ? const Color(0xFF362E2C)
+            : const Color(0xFFE8E1DE),
+        outline: isDark ? const Color(0xFF8F8481) : const Color(0xFF7E7370),
+        outlineVariant: isDark
+            ? const Color(0xFF4A4140)
+            : const Color(0xFFD9D0CD),
       );
   final surface = scheme.surface;
+
+  const baseText = TextTheme(
+    headlineMedium: TextStyle(fontSize: 32, height: 1.1, fontWeight: FontWeight.w700),
+    headlineSmall: TextStyle(fontSize: 25, height: 1.15, fontWeight: FontWeight.w700),
+    titleLarge: TextStyle(fontSize: 20, height: 1.2, fontWeight: FontWeight.w700),
+    titleMedium: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+    bodyLarge: TextStyle(fontSize: 16, height: 1.5),
+    bodyMedium: TextStyle(fontSize: 14, height: 1.5),
+  );
+  final body = _webFonts ? GoogleFonts.figtreeTextTheme(baseText) : baseText;
+  final textTheme = body.copyWith(
+    headlineMedium: _display(body.headlineMedium!),
+    headlineSmall: _display(body.headlineSmall!),
+    titleLarge: _display(body.titleLarge!),
+  );
 
   return ThemeData(
     useMaterial3: true,
     colorScheme: scheme,
     scaffoldBackgroundColor: surface,
+    textTheme: textTheme,
     appBarTheme: AppBarTheme(
       backgroundColor: surface,
       foregroundColor: scheme.onSurface,
@@ -154,36 +188,40 @@ ThemeData _buildTheme(Brightness brightness) {
       fillColor: scheme.surfaceContainerLow,
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(8),
         borderSide: BorderSide(color: scheme.outline),
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(14),
-        borderSide: BorderSide(color: scheme.outline.withValues(alpha: 0.65)),
+        borderRadius: BorderRadius.circular(8),
+        borderSide: BorderSide(color: scheme.outlineVariant),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(8),
         borderSide: BorderSide(color: scheme.primary, width: 2),
       ),
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
         minimumSize: const Size(48, 48),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         textStyle: const TextStyle(fontWeight: FontWeight.w600),
       ),
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
         minimumSize: const Size(48, 48),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        side: BorderSide(color: scheme.outlineVariant),
       ),
     ),
     navigationBarTheme: NavigationBarThemeData(
       backgroundColor: surface,
       indicatorColor: scheme.primaryContainer,
+      indicatorShape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+      ),
       elevation: 0,
-      height: 76,
+      height: 72,
       labelTextStyle: WidgetStateProperty.resolveWith(
         (states) => TextStyle(
           fontSize: 12,
@@ -193,18 +231,14 @@ ThemeData _buildTheme(Brightness brightness) {
         ),
       ),
     ),
+    navigationRailTheme: NavigationRailThemeData(
+      backgroundColor: surface,
+      indicatorColor: scheme.primaryContainer,
+    ),
     dividerTheme: DividerThemeData(
       color: scheme.outlineVariant,
       thickness: 1,
       space: 1,
-    ),
-    textTheme: const TextTheme(
-      headlineMedium: TextStyle(fontSize: 31, height: 1.12),
-      headlineSmall: TextStyle(fontSize: 26, height: 1.15),
-      titleLarge: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-      titleMedium: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-      bodyLarge: TextStyle(fontSize: 16, height: 1.45),
-      bodyMedium: TextStyle(fontSize: 14, height: 1.45),
     ),
   );
 }
@@ -828,18 +862,8 @@ class _WelcomeScreenState extends State<_WelcomeScreen> {
     final authConfigured = widget.controller.authRepository != null;
 
     return Scaffold(
-      body: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              scheme.primaryContainer.withValues(alpha: 0.45),
-              scheme.surface,
-            ],
-            stops: const [0, 0.6],
-          ),
-        ),
+      body: ColoredBox(
+        color: scheme.surface,
         child: SafeArea(
           child: Center(
             child: SingleChildScrollView(
@@ -861,38 +885,21 @@ class _WelcomeScreenState extends State<_WelcomeScreen> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Center(
-                        child: Container(
-                          width: 84,
-                          height: 84,
-                          decoration: BoxDecoration(
-                            color: scheme.primary,
-                            borderRadius: BorderRadius.circular(24),
-                          ),
-                          child: Icon(
-                            Icons.menu_book_rounded,
-                            size: 44,
-                            color: scheme.onPrimary,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 22),
+                      const Center(child: _UlosBand(width: 64)),
+                      const SizedBox(height: 24),
                       Text(
                         'Horas',
                         textAlign: TextAlign.center,
-                        style: theme.textTheme.labelLarge?.copyWith(
+                        style: theme.textTheme.headlineMedium?.copyWith(
+                          fontSize: 48,
                           color: scheme.primary,
-                          letterSpacing: 1.2,
-                          fontWeight: FontWeight.w700,
                         ),
                       ),
-                      const SizedBox(height: 6),
+                      const SizedBox(height: 8),
                       Text(
                         'Selamat datang!',
                         textAlign: TextAlign.center,
-                        style: theme.textTheme.headlineMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
+                        style: theme.textTheme.titleLarge,
                       ),
                       const SizedBox(height: 10),
                       Text(
@@ -914,7 +921,7 @@ class _WelcomeScreenState extends State<_WelcomeScreen> {
                           foregroundColor: scheme.onSurface,
                           side: BorderSide(color: scheme.outline),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
+                            borderRadius: BorderRadius.circular(8),
                           ),
                         ),
                         child: Row(
@@ -945,7 +952,7 @@ class _WelcomeScreenState extends State<_WelcomeScreen> {
                         style: FilledButton.styleFrom(
                           minimumSize: const Size.fromHeight(52),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
+                            borderRadius: BorderRadius.circular(8),
                           ),
                         ),
                         icon: const Icon(Icons.person_outline_rounded),
@@ -957,7 +964,7 @@ class _WelcomeScreenState extends State<_WelcomeScreen> {
                           padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
                             color: scheme.errorContainer,
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(8),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1248,70 +1255,39 @@ class _HomeScreenState extends State<_HomeScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        Container(
-                          width: 44,
-                          height: 44,
-                          decoration: BoxDecoration(
-                            color: scheme.primary,
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: Icon(
-                            Icons.menu_book_rounded,
-                            color: scheme.onPrimary,
-                            size: 23,
-                          ),
-                        ),
+                        const _UlosBand(width: 28),
                         const SizedBox(width: 12),
                         Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Horas',
-                                style: theme.textTheme.titleLarge,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              Text(
-                                'Belajar bahasa Batak',
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: scheme.onSurfaceVariant,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ],
+                          child: Text(
+                            'Horas',
+                            style: theme.textTheme.titleLarge?.copyWith(
+                              fontSize: 24,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        const SizedBox(width: 12),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
-                          ),
-                          decoration: BoxDecoration(
-                            color: scheme.surfaceContainerLow,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(
-                            '${_formatCount(widget.controller.entries.length)} entri',
-                            style: theme.textTheme.labelMedium?.copyWith(
-                              color: scheme.primary,
-                              fontWeight: FontWeight.w700,
-                            ),
+                        Text(
+                          '${_formatCount(widget.controller.entries.length)} entri',
+                          style: theme.textTheme.labelLarge?.copyWith(
+                            color: scheme.onSurfaceVariant,
                           ),
                         ),
                       ],
                     ),
-                    SizedBox(height: isWide ? 48 : 34),
+                    SizedBox(height: isWide ? 24 : 18),
+                    _TobaWordSlider(onOpenDictionary: widget.onOpenDictionary),
+                    SizedBox(height: isWide ? 48 : 36),
                     Text(
                       hasStudied
                           ? 'Senang belajar lagi?'
                           : 'Mulai dari satu kata.',
                       style: theme.textTheme.headlineMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: -0.5,
+                        fontSize: isWide ? 44 : 34,
+                        height: 1.05,
+                        letterSpacing: -1,
                       ),
                     ),
                     const SizedBox(height: 8),
@@ -1326,7 +1302,7 @@ class _HomeScreenState extends State<_HomeScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 28),
                     if (isWide)
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1428,7 +1404,7 @@ class _HomeScreenState extends State<_HomeScreen> {
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: scheme.surfaceContainerLow,
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(8),
             ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1477,6 +1453,458 @@ class _HomeScreenState extends State<_HomeScreen> {
   }
 }
 
+
+/// Pita tiga garis ala ulos (merah, hitam, emas) sebagai penanda merek.
+class _UlosBand extends StatelessWidget {
+  const _UlosBand({required this.width});
+
+  final double width;
+
+  @override
+  Widget build(BuildContext context) {
+    final height = width * 0.62;
+    return SizedBox(
+      width: width,
+      height: height,
+      child: Column(
+        children: [
+          Expanded(flex: 5, child: ColoredBox(color: Theme.of(context).colorScheme.primary, child: SizedBox(width: width))),
+          SizedBox(height: height * 0.07),
+          Expanded(flex: 2, child: ColoredBox(color: _ulosBlack, child: SizedBox(width: width))),
+          SizedBox(height: height * 0.07),
+          Expanded(flex: 1, child: ColoredBox(color: _gold, child: SizedBox(width: width))),
+        ],
+      ),
+    );
+  }
+}
+
+/// Garis tenun tipis di tepi atas panel.
+class _UlosStripe extends StatelessWidget {
+  const _UlosStripe();
+
+  @override
+  Widget build(BuildContext context) {
+    return const SizedBox(
+      height: 8,
+      child: Row(
+        children: [
+          Expanded(flex: 6, child: ColoredBox(color: _ulosBlack)),
+          Expanded(flex: 1, child: ColoredBox(color: _gold)),
+          Expanded(flex: 3, child: ColoredBox(color: _ulosBlack)),
+        ],
+      ),
+    );
+  }
+}
+
+/// Satu kata Batak Toba di slider beranda. Semua kata ada di kamus bawaan.
+class _TobaWord {
+  const _TobaWord({
+    required this.word,
+    required this.label,
+    required this.meaning,
+    required this.background,
+    required this.foreground,
+    required this.muted,
+    required this.stripes,
+  });
+
+  final String word;
+
+  /// Fungsi kata dalam percakapan, mis. "Salam".
+  final String label;
+  final String meaning;
+  final Color background;
+  final Color foreground;
+
+  /// Warna teks sekunder: turunan dari latar, bukan abu-abu transparan.
+  final Color muted;
+
+  /// Tiga warna pita tenun di tepi atas panel.
+  final List<Color> stripes;
+}
+
+const _tobaWords = <_TobaWord>[
+  _TobaWord(
+    word: 'Horas',
+    label: 'Salam',
+    meaning: 'Sehat, senang, makmur. Sapaan khas orang Batak.',
+    background: _ulosRed,
+    foreground: Color(0xFFFFF4F1),
+    muted: Color(0xFFF2C9C3),
+    stripes: [_ulosBlack, _gold, Color(0xFFFFF4F1)],
+  ),
+  _TobaWord(
+    word: 'Mauliate',
+    label: 'Terima kasih',
+    meaning: 'Ucapan terima kasih. Tambahkan “godang” untuk “banyak”.',
+    background: _ulosBlack,
+    foreground: Color(0xFFF7E7B6),
+    muted: Color(0xFFCDB57A),
+    stripes: [_ulosRed, _gold, _ulosRed],
+  ),
+  _TobaWord(
+    word: 'Santabi',
+    label: 'Permisi',
+    meaning: 'Ucapan hormat: permisi, mohon maaf.',
+    background: Color(0xFFE9DFDA),
+    foreground: Color(0xFF3A1512),
+    muted: Color(0xFF6B3F3A),
+    stripes: [_ulosRed, _ulosBlack, _ulosRed],
+  ),
+  _TobaWord(
+    word: 'Olo',
+    label: 'Ya',
+    meaning: 'Setuju, menurut. Lawannya “dang”, yang berarti tidak.',
+    background: _gold,
+    foreground: Color(0xFF2B1F00),
+    muted: Color(0xFF4A3600),
+    stripes: [_ulosBlack, _ulosRed, _ulosBlack],
+  ),
+];
+
+/// Slider kata Batak Toba yang bergeser otomatis tiap 4,5 detik.
+/// Berhenti saat disentuh/di-hover, bisa dijeda, dan tidak berputar sendiri
+/// bila pengguna meminta gerakan dikurangi.
+class _TobaWordSlider extends StatefulWidget {
+  const _TobaWordSlider({required this.onOpenDictionary});
+
+  final ValueChanged<String> onOpenDictionary;
+
+  @override
+  State<_TobaWordSlider> createState() => _TobaWordSliderState();
+}
+
+class _TobaWordSliderState extends State<_TobaWordSlider>
+    with SingleTickerProviderStateMixin {
+  static const _interval = Duration(milliseconds: 4500);
+  static final _start = _tobaWords.length * 500;
+
+  late final PageController _pages = PageController(initialPage: _start);
+  late final AnimationController _progress;
+  int _pageIndex = _start;
+  bool _playing = _webFonts; // tidak berputar di tes widget
+  bool _held = false; // sedang disentuh / di-hover
+  bool _motionChecked = false;
+
+  int get _current => _pageIndex % _tobaWords.length;
+
+  @override
+  void initState() {
+    super.initState();
+    _progress = AnimationController(vsync: this, duration: _interval)
+      ..addStatusListener((status) {
+        if (status == AnimationStatus.completed) _goTo(_pageIndex + 1);
+      });
+    if (_playing) _progress.forward();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_motionChecked) {
+      _motionChecked = true;
+      if (MediaQuery.of(context).disableAnimations) {
+        _playing = false;
+        _progress.stop();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _progress.dispose();
+    _pages.dispose();
+    super.dispose();
+  }
+
+  void _goTo(int page) {
+    if (!_pages.hasClients) return;
+    if (MediaQuery.of(context).disableAnimations) {
+      _pages.jumpToPage(page);
+    } else {
+      _pages.animateToPage(
+        page,
+        duration: const Duration(milliseconds: 700),
+        curve: Curves.easeOutQuart,
+      );
+    }
+  }
+
+  void _hold(bool value) {
+    _held = value;
+    if (value) {
+      _progress.stop();
+    } else if (_playing) {
+      _progress.forward();
+    }
+  }
+
+  void _togglePlaying() {
+    setState(() => _playing = !_playing);
+    if (_playing && !_held) {
+      _progress.forward();
+    } else {
+      _progress.stop();
+    }
+  }
+
+  void _onPageChanged(int page) {
+    setState(() => _pageIndex = page);
+    _progress.reset();
+    if (_playing && !_held) _progress.forward();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 760;
+        return Semantics(
+          container: true,
+          label: 'Kata-kata Batak, bergeser otomatis',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              MouseRegion(
+                onEnter: (_) => _hold(true),
+                onExit: (_) => _hold(false),
+                child: Listener(
+                  onPointerDown: (_) => _hold(true),
+                  onPointerUp: (_) => _hold(false),
+                  onPointerCancel: (_) => _hold(false),
+                  child: SizedBox(
+                    height: wide ? 320 : 300,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: ScrollConfiguration(
+                        behavior: ScrollConfiguration.of(context).copyWith(
+                          dragDevices: {
+                            PointerDeviceKind.touch,
+                            PointerDeviceKind.mouse,
+                            PointerDeviceKind.trackpad,
+                          },
+                        ),
+                        child: PageView.builder(
+                          controller: _pages,
+                          onPageChanged: _onPageChanged,
+                          itemBuilder: (context, i) {
+                            final word = _tobaWords[i % _tobaWords.length];
+                            return _TobaWordPane(
+                              item: word,
+                              wide: wide,
+                              onOpen: () => widget.onOpenDictionary(word.word),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (var i = 0; i < _tobaWords.length; i++) ...[
+                    if (i > 0) const SizedBox(width: 8),
+                    Expanded(
+                      child: InkWell(
+                        onTap: () => _goTo(_pageIndex - _current + i),
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 6, bottom: 8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _SegmentBar(
+                                progress: _progress,
+                                state: i < _current
+                                    ? 1
+                                    : i == _current
+                                    ? -1
+                                    : 0,
+                                color: scheme.primary,
+                                track: scheme.outlineVariant,
+                              ),
+                              const SizedBox(height: 8),
+                              FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  _tobaWords[i].word,
+                                  maxLines: 1,
+                                  style: theme.textTheme.labelLarge?.copyWith(
+                                    color: i == _current
+                                        ? scheme.onSurface
+                                        : scheme.onSurfaceVariant,
+                                    fontWeight: i == _current
+                                        ? FontWeight.w700
+                                        : FontWeight.w500,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                  IconButton(
+                    tooltip: _playing ? 'Jeda geseran' : 'Putar geseran',
+                    onPressed: _togglePlaying,
+                    icon: Icon(
+                      _playing
+                          ? Icons.pause_rounded
+                          : Icons.play_arrow_rounded,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Batang waktu: terisi penuh (state 1), sedang berjalan (-1), atau kosong (0).
+class _SegmentBar extends StatelessWidget {
+  const _SegmentBar({
+    required this.progress,
+    required this.state,
+    required this.color,
+    required this.track,
+  });
+
+  final Animation<double> progress;
+  final int state;
+  final Color color;
+  final Color track;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: progress,
+      builder: (context, _) {
+        final fill = state == 1 ? 1.0 : (state == 0 ? 0.0 : progress.value);
+        return SizedBox(
+          height: 3,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              ColoredBox(color: track),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: FractionallySizedBox(
+                  widthFactor: state == -1 && fill == 0 ? 0.0 : fill,
+                  child: ColoredBox(color: color),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _TobaWordPane extends StatelessWidget {
+  const _TobaWordPane({
+    required this.item,
+    required this.wide,
+    required this.onOpen,
+  });
+
+  final _TobaWord item;
+  final bool wide;
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final fg = item.foreground;
+    final pad = wide ? 32.0 : 22.0;
+    return ColoredBox(
+      color: item.background,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Pita tenun di tepi atas, senada dengan panel latihan.
+          SizedBox(
+            height: 8,
+            child: Row(
+              children: [
+                Expanded(flex: 6, child: ColoredBox(color: item.stripes[0])),
+                Expanded(flex: 1, child: ColoredBox(color: item.stripes[1])),
+                Expanded(flex: 3, child: ColoredBox(color: item.stripes[2])),
+              ],
+            ),
+          ),
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(pad, pad - 6, pad, pad),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleMedium?.copyWith(color: item.muted),
+                  ),
+                  const Spacer(),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      item.word,
+                      maxLines: 1,
+                      style: _display(
+                        TextStyle(
+                          fontSize: wide ? 104 : 72,
+                          height: 0.95,
+                          letterSpacing: wide ? -3 : -2,
+                          fontWeight: FontWeight.w800,
+                          color: fg,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 440),
+                    child: Text(
+                      item.meaning,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        color: item.muted,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  FilledButton(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: fg,
+                      foregroundColor: item.background,
+                    ),
+                    onPressed: onOpen,
+                    child: const Text('Lihat di kamus'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _TodayPracticePanel extends StatelessWidget {
   const _TodayPracticePanel({
     required this.title,
@@ -1493,68 +1921,46 @@ class _TodayPracticePanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: _studyGreen,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final showBookMark = constraints.maxWidth >= 400;
-          final content = Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: textTheme.headlineSmall?.copyWith(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                ),
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: ColoredBox(
+        color: _ulosRed,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const _UlosStripe(),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(22, 20, 22, 22),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: textTheme.headlineSmall?.copyWith(
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    description,
+                    style: textTheme.bodyMedium?.copyWith(
+                      color: const Color(0xFFF6DEDA),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  FilledButton(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _paper,
+                      foregroundColor: _ink,
+                    ),
+                    onPressed: onStart,
+                    child: Text(actionLabel),
+                  ),
+                ],
               ),
-              const SizedBox(height: 8),
-              Text(
-                description,
-                style: textTheme.bodyMedium?.copyWith(
-                  color: const Color(0xFFE3ECE6),
-                ),
-              ),
-              const SizedBox(height: 18),
-              FilledButton.icon(
-                style: FilledButton.styleFrom(
-                  backgroundColor: _paper,
-                  foregroundColor: _ink,
-                ),
-                onPressed: onStart,
-                icon: const Icon(Icons.arrow_forward_rounded, size: 18),
-                label: Text(actionLabel),
-              ),
-            ],
-          );
-
-          if (!showBookMark) return content;
-
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(child: content),
-              const SizedBox(width: 16),
-              Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                child: const Icon(
-                  Icons.auto_stories_rounded,
-                  color: _gold,
-                  size: 32,
-                ),
-              ),
-            ],
-          );
-        },
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1810,7 +2216,7 @@ class _DictionaryEntryTile extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onOpen,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(8),
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 2),
           child: Row(
@@ -2214,7 +2620,7 @@ class _PracticeScreenState extends State<_PracticeScreen> {
           padding: const EdgeInsets.all(22),
           decoration: BoxDecoration(
             color: theme.colorScheme.surfaceContainerLow,
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(8),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2435,7 +2841,7 @@ class _PracticeScreenState extends State<_PracticeScreen> {
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
             color: scheme.surfaceContainerLow,
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(8),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2472,10 +2878,10 @@ class _PracticeScreenState extends State<_PracticeScreen> {
                 color: isSelected
                     ? scheme.secondaryContainer
                     : scheme.surfaceContainerLow,
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(8),
                 child: InkWell(
                   onTap: () => _selectAnswer(option),
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(8),
                   child: Container(
                     width: double.infinity,
                     padding: const EdgeInsets.symmetric(
@@ -2487,7 +2893,7 @@ class _PracticeScreenState extends State<_PracticeScreen> {
                         color: color,
                         width: isSelected ? 2 : 1,
                       ),
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(8),
                     ),
                     child: Row(
                       children: [
@@ -2575,7 +2981,7 @@ class _PracticeScreenState extends State<_PracticeScreen> {
         padding: const EdgeInsets.symmetric(vertical: 14),
         decoration: BoxDecoration(
           color: theme.colorScheme.surfaceContainerLow,
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(8),
         ),
         child: Column(
           children: [
@@ -2687,7 +3093,7 @@ class _PracticeScreenState extends State<_PracticeScreen> {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: scheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(color: scheme.outlineVariant),
       ),
       child: Row(
@@ -2778,7 +3184,7 @@ class _PracticeScreenState extends State<_PracticeScreen> {
           padding: const EdgeInsets.all(18),
           decoration: BoxDecoration(
             color: theme.colorScheme.surfaceContainerLow,
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(8),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2806,7 +3212,7 @@ class _PracticeScreenState extends State<_PracticeScreen> {
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: theme.colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(8),
           ),
           child: _arrangedSentenceTokenIndices.isEmpty
               ? Text(
@@ -3317,7 +3723,7 @@ class _ProfileScreenState extends State<_ProfileScreen> {
         padding: const EdgeInsets.symmetric(vertical: 14),
         decoration: BoxDecoration(
           color: theme.colorScheme.surfaceContainerLow,
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(8),
         ),
         child: Column(
           children: [
@@ -3366,7 +3772,7 @@ class _ProfileScreenState extends State<_ProfileScreen> {
           clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
             color: scheme.surfaceContainerLow,
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(8),
           ),
           child: Column(children: children),
         ),
@@ -3526,7 +3932,7 @@ class _ProfileScreenState extends State<_ProfileScreen> {
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
                     color: scheme.errorContainer,
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
                     errors.join('\n'),
@@ -3728,7 +4134,7 @@ class _LoginScreenState extends State<_LoginScreen> {
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
                     color: scheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
                     authConfigured
