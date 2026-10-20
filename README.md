@@ -99,3 +99,18 @@ Yang membuat aplikasi ringan:
 - Soal kuis diambil acak dari data yang sudah disiapkan.
 - Firebase dan kamus dimuat bersamaan; layar pemuatan langsung tampil.
 
+## Soal kuis dari Firebase
+
+Tab Latihan memakai bank soal di Firestore, bukan soal acak dari kamus:
+
+- `quiz_meta/current` (versi) dan `quiz_packs/*` (isi soal). Dibuat oleh
+  `python tools/publish_quiz.py --csv tools/database_bahasa_batak.csv --key <kunci>`.
+- Satu pemasangan baru membaca sekitar 2 dokumen. Salinan disimpan di perangkat
+  (SharedPreferences), jadi Latihan siap instan dan bisa offline.
+- Setiap dibuka, aplikasi mengecek versi di latar belakang (1 baca). Versi baru
+  dipakai pada pembukaan berikutnya.
+- Satu putaran = 10 soal acak dari bank soal, tanpa pengulangan.
+- Jika bank soal belum bisa diambil (belum dipublikasikan, atau pembukaan pertama
+  tanpa internet), kuis memakai soal otomatis dari kamus seperti sebelumnya.
+- Untuk memperbarui soal: ubah CSV, jalankan ulang `publish_quiz.py`.
+

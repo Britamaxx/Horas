@@ -17,14 +17,18 @@ import 'data/dictionary_repository.dart';
 import 'data/firebase_bootstrap.dart';
 import 'data/pending_sentence_exercise_repository.dart';
 import 'data/progress_repository.dart';
+import 'data/quiz_cache.dart';
+import 'data/quiz_repository.dart';
 import 'data/sentence_exercise_repository.dart';
 import 'data/synced_dictionary_repository.dart';
 import 'models/app_user.dart';
 import 'models/dictionary_entry.dart';
+import 'models/quiz_bank_question.dart';
 import 'models/sentence_exercise.dart';
 import 'models/user_profile.dart';
 import 'data/user_profile_repository.dart';
 import 'services/learning_progress_store.dart';
+import 'services/quiz_builder.dart';
 
 const _paper = Color(0xFFF6F0E4);
 const _ink = Color(0xFF25231F);
@@ -54,6 +58,11 @@ void main() {
         cache: createDictionaryCache(),
         fallback: const CsvDictionaryRepository(),
       ),
+      // Bank soal kuis dari Firebase; kosong -> soal otomatis dari kamus.
+      quizRepository: SyncedQuizRepository(
+        source: backend.then((value) => value?.quiz),
+        cache: const PrefsQuizCache(),
+      ),
     ),
   );
 }
@@ -66,6 +75,7 @@ class HorasApp extends StatelessWidget {
     this.progressRepository,
     this.firebaseBackend,
     this.dictionaryRepository = const CsvDictionaryRepository(),
+    this.quizRepository = const NoQuizRepository(),
     this.sentenceExerciseRepository = const PendingSentenceExerciseRepository(),
   });
 
@@ -77,6 +87,7 @@ class HorasApp extends StatelessWidget {
   /// diberikan langsung (mis. di tes).
   final Future<FirebaseBackend?>? firebaseBackend;
   final DictionaryRepository dictionaryRepository;
+  final QuizRepository quizRepository;
   final SentenceExerciseRepository sentenceExerciseRepository;
 
   @override
@@ -93,6 +104,7 @@ class HorasApp extends StatelessWidget {
         progressRepository: progressRepository,
         firebaseBackend: firebaseBackend,
         dictionaryRepository: dictionaryRepository,
+        quizRepository: quizRepository,
         sentenceExerciseRepository: sentenceExerciseRepository,
       ),
     );
@@ -204,6 +216,7 @@ class _AppBootstrap extends StatefulWidget {
     required this.progressRepository,
     required this.firebaseBackend,
     required this.dictionaryRepository,
+    required this.quizRepository,
     required this.sentenceExerciseRepository,
   });
 
@@ -212,6 +225,7 @@ class _AppBootstrap extends StatefulWidget {
   final ProgressRepository? progressRepository;
   final Future<FirebaseBackend?>? firebaseBackend;
   final DictionaryRepository dictionaryRepository;
+  final QuizRepository quizRepository;
   final SentenceExerciseRepository sentenceExerciseRepository;
 
   @override
@@ -232,10 +246,15 @@ class _AppBootstrapState extends State<_AppBootstrap> {
     // Mulai keduanya sekaligus: kamus diurai di isolate, Firebase init jalan
     // di sampingnya. (Sengaja bukan `.wait`, agar pesan error asli tetap utuh.)
     final indexFuture = widget.dictionaryRepository.loadIndex();
+    // Bank soal dimuat bersamaan; gagal -> kosong -> soal otomatis dari kamus.
+    final quizFuture = widget.quizRepository.loadQuestions().catchError(
+      (Object _) => const <QuizBankQuestion>[],
+    );
     final backendFuture =
         widget.firebaseBackend ?? Future<FirebaseBackend?>.value();
     final index = await indexFuture;
     final backend = await backendFuture;
+    final quizBank = await quizFuture;
     final savedIds = await _progressStore.loadSavedEntryIds();
     final quizStats = await _progressStore.loadQuizStats();
     final guestSession = await _GuestSessionStore.load();
@@ -247,6 +266,7 @@ class _AppBootstrapState extends State<_AppBootstrap> {
       quizStats: quizStats,
       guestSession: guestSession,
       sentenceExercises: sentenceExercises,
+      quizBank: quizBank,
       authRepository: widget.authRepository ?? backend?.auth,
       userProfileRepository: widget.userProfileRepository ?? backend?.profiles,
       progressStore: _progressStore,
@@ -343,6 +363,7 @@ class AppController extends ChangeNotifier {
     required this.userProfileRepository,
     required this.progressStore,
     this.progressRepository,
+    this.quizBank = const [],
     bool guestSession = false,
   }) : _activeStore = progressStore,
        isGuestSession = guestSession,
@@ -366,6 +387,9 @@ class AppController extends ChangeNotifier {
   final AuthRepository? authRepository;
   final UserProfileRepository? userProfileRepository;
   final ProgressRepository? progressRepository;
+
+  /// Bank soal kuis dari Firebase. Kosong = kuis memakai soal otomatis dari kamus.
+  final List<QuizBankQuestion> quizBank;
 
   /// Cache lokal mode TAMU (kunci lama). Akun memakai cache sendiri per uid.
   final LearningProgressStore progressStore;
@@ -1957,7 +1981,7 @@ class _PracticeScreen extends StatefulWidget {
 
 class _PracticeScreenState extends State<_PracticeScreen> {
   late _PracticeMode _mode;
-  late List<_QuizQuestion> _questions;
+  late List<QuizItem> _questions;
   SentenceExercise? _activeSentenceExercise;
   List<int> _availableSentenceTokenIndices = [];
   final List<int> _arrangedSentenceTokenIndices = [];
@@ -1974,7 +1998,10 @@ class _PracticeScreenState extends State<_PracticeScreen> {
   void initState() {
     super.initState();
     _mode = widget.initialMode;
-    _questions = _createQuizQuestions(widget.controller.index);
+    _questions = buildQuizItems(
+      index: widget.controller.index,
+      bank: widget.controller.quizBank,
+    );
     _answers = List<String?>.filled(_questions.length, null);
     _startSentenceExercise();
   }
@@ -2004,7 +2031,10 @@ class _PracticeScreenState extends State<_PracticeScreen> {
   }
 
   void _restartQuiz() {
-    _questions = _createQuizQuestions(widget.controller.index);
+    _questions = buildQuizItems(
+      index: widget.controller.index,
+      bank: widget.controller.quizBank,
+    );
     _answers = List<String?>.filled(_questions.length, null);
     _questionIndex = 0;
     _finalCorrect = 0;
@@ -2410,15 +2440,17 @@ class _PracticeScreenState extends State<_PracticeScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                question.answer.partOfSpeechLabel,
-                style: theme.textTheme.labelMedium?.copyWith(
-                  color: scheme.primary,
+              if (question.partOfSpeechLabel != null) ...[
+                Text(
+                  question.partOfSpeechLabel!,
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: scheme.primary,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
+                const SizedBox(height: 8),
+              ],
               Text(
-                question.answer.headword,
+                question.word,
                 style: theme.textTheme.headlineSmall?.copyWith(
                   fontWeight: FontWeight.w700,
                 ),
@@ -2668,7 +2700,7 @@ class _PracticeScreenState extends State<_PracticeScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '${index + 1}. ${question.answer.headword}',
+                  '${index + 1}. ${question.word}',
                   style: theme.textTheme.titleSmall,
                 ),
                 const SizedBox(height: 4),
@@ -2677,7 +2709,7 @@ class _PracticeScreenState extends State<_PracticeScreen> {
                 else if (!isCorrect)
                   Text('Jawabanmu: $chosen', style: TextStyle(color: color)),
                 if (!isCorrect)
-                  Text('Padanan kamus: ${question.correctDefinition}'),
+                  Text('Jawaban benar: ${question.correctDefinition}'),
                 if (isCorrect)
                   Text(
                     question.correctDefinition,
@@ -2863,54 +2895,6 @@ class _PracticeScreenState extends State<_PracticeScreen> {
       ],
     );
   }
-}
-
-class _QuizQuestion {
-  const _QuizQuestion({
-    required this.answer,
-    required this.correctDefinition,
-    required this.options,
-  });
-
-  final DictionaryEntry answer;
-  final String correctDefinition;
-  final List<String> options;
-}
-
-/// Soal diambil acak dari data yang sudah disiapkan di [DictionaryIndex],
-/// jadi membuka tab Latihan atau mengulang kuis tidak lagi memindai kamus.
-List<_QuizQuestion> _createQuizQuestions(DictionaryIndex index) {
-  final seeds = index.quizSeeds;
-  final pool = index.distractorPool;
-  if (seeds.isEmpty || pool.length < 2) return const [];
-
-  final random = Random();
-  final questionCount = min(10, seeds.length);
-  final picked = <int>{};
-  while (picked.length < questionCount) {
-    picked.add(random.nextInt(seeds.length));
-  }
-
-  return picked
-      .map((seedIndex) {
-        final seed = seeds[seedIndex];
-        final wanted = min(3, pool.length - 1);
-        final distractors = <String>{};
-        var attempts = 0;
-        while (distractors.length < wanted && attempts < 200) {
-          attempts++;
-          final candidate = pool[random.nextInt(pool.length)];
-          if (candidate != seed.definition) distractors.add(candidate);
-        }
-        final options = <String>[seed.definition, ...distractors]
-          ..shuffle(random);
-        return _QuizQuestion(
-          answer: seed.entry,
-          correctDefinition: seed.definition,
-          options: List.unmodifiable(options),
-        );
-      })
-      .toList(growable: false);
 }
 
 class _LocalProfile {

@@ -7,8 +7,10 @@ import 'dictionary_source.dart';
 import 'firebase_auth_repository.dart';
 import 'firestore_dictionary_source.dart';
 import 'firestore_progress_repository.dart';
+import 'firestore_quiz_source.dart';
 import 'firestore_user_profile_repository.dart';
 import 'progress_repository.dart';
+import 'quiz_source.dart';
 import 'user_profile_repository.dart';
 
 class FirebaseBackend {
@@ -17,12 +19,14 @@ class FirebaseBackend {
     required this.profiles,
     required this.progress,
     required this.dictionary,
+    required this.quiz,
   });
 
   final AuthRepository auth;
   final UserProfileRepository profiles;
   final ProgressRepository progress;
   final DictionarySource dictionary;
+  final QuizSource quiz;
 }
 
 /// Menginisialisasi Firebase. Jika belum dikonfigurasi atau gagal, hasilnya
@@ -36,6 +40,7 @@ Future<FirebaseBackend?> initializeFirebaseBackend() async {
       profiles: FirestoreUserProfileRepository(),
       progress: FirestoreProgressRepository(),
       dictionary: FirestoreDictionarySource(),
+      quiz: FirestoreQuizSource(),
     );
   } catch (error) {
     debugPrint('Firebase tidak aktif, memakai mode lokal: $error');
