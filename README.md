@@ -257,25 +257,6 @@ Koleksi `dict_entries` yang mungkin ada dari impor awal tidak digunakan oleh alu
 
 ## Mengelola Data Kamus dan Kuis
 
-### Memperbarui kamus
-
-1. Edit `assets/data/dict_entries.csv` dengan menjaga nama kolom dan format yang dipakai parser.
-2. Jalankan `--dry-run` untuk memeriksa jumlah entri dan paket.
-3. Jalankan `tools/publish_dictionary.py` dengan service account key yang aman.
-4. Aplikasi akan memeriksa versi baru dan menggunakan paket yang diperbarui pada pembukaan berikutnya.
-
-### Memperbarui soal
-
-Edit `tools/database_bahasa_batak.csv`. Skrip kuis menggunakan kolom berikut:
-
-- `kata_bahasa_batak`
-- `jawaban_bahasa_indonesia`
-- `opsi_salah_1`
-- `opsi_salah_2`
-- `opsi_salah_3`
-
-Setiap baris perlu memiliki kata, jawaban benar, dan tiga opsi salah yang terisi. Jalankan `--dry-run` terlebih dahulu, kemudian publikasikan dengan `tools/publish_quiz.py`.
-
 ## Menjalankan Aplikasi
 
 Prasyarat: Flutter SDK yang sesuai dengan batas versi Dart pada `pubspec.yaml`, serta Android Studio/Android SDK atau perangkat target yang sesuai.
