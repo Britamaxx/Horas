@@ -28,6 +28,7 @@ import 'models/user_profile.dart';
 import 'data/user_profile_repository.dart';
 import 'services/learning_progress_store.dart';
 import 'services/quiz_builder.dart';
+import 'widgets/horas_logo.dart';
 
 // Palet ulos: merah, hitam, putih, dengan emas sebagai aksen langka.
 // Semua netral diberi sedikit rona merah supaya tidak terasa abu-abu mati.
@@ -870,17 +871,8 @@ class _WelcomeScreenState extends State<_WelcomeScreen> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const Center(child: _UlosBand(width: 64)),
-                      const SizedBox(height: 24),
-                      Text(
-                        'Horas',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.headlineMedium?.copyWith(
-                          fontSize: 48,
-                          color: scheme.primary,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
+                      const Center(child: HorasLogo.full(width: 220)),
+                      const SizedBox(height: 12),
                       Text(
                         'Selamat datang!',
                         textAlign: TextAlign.center,
@@ -1231,8 +1223,8 @@ class _HomeScreenState extends State<_HomeScreen> {
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        const _UlosBand(width: 28),
-                        const SizedBox(width: 12),
+                        const HorasLogo.mark(size: 34),
+                        const SizedBox(width: 10),
                         Expanded(
                           child: Text(
                             'Horas',
@@ -1429,30 +1421,6 @@ class _HomeScreenState extends State<_HomeScreen> {
 
 
 /// Pita tiga garis ala ulos (merah, hitam, emas) sebagai penanda merek.
-class _UlosBand extends StatelessWidget {
-  const _UlosBand({required this.width});
-
-  final double width;
-
-  @override
-  Widget build(BuildContext context) {
-    final height = width * 0.62;
-    return SizedBox(
-      width: width,
-      height: height,
-      child: Column(
-        children: [
-          Expanded(flex: 5, child: ColoredBox(color: Theme.of(context).colorScheme.primary, child: SizedBox(width: width))),
-          SizedBox(height: height * 0.07),
-          Expanded(flex: 2, child: ColoredBox(color: _ulosBlack, child: SizedBox(width: width))),
-          SizedBox(height: height * 0.07),
-          Expanded(flex: 1, child: ColoredBox(color: _gold, child: SizedBox(width: width))),
-        ],
-      ),
-    );
-  }
-}
-
 /// Garis tenun tipis di tepi atas panel.
 class _UlosStripe extends StatelessWidget {
   const _UlosStripe();
@@ -3731,11 +3699,7 @@ class _ProfileScreenState extends State<_ProfileScreen> {
                   onTap: () => showAboutDialog(
                     context: context,
                     applicationName: 'Horas',
-                    applicationIcon: Icon(
-                      Icons.menu_book_rounded,
-                      size: 36,
-                      color: scheme.primary,
-                    ),
+                    applicationIcon: const HorasLogo.mark(size: 48),
                     children: const [
                       Text(
                         'Aplikasi belajar Bahasa Batak Toba: kamus dan kuis '
@@ -3839,7 +3803,10 @@ class _LoginScreenState extends State<_LoginScreen> {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(24, 30, 24, 28),
               children: [
-                Icon(Icons.menu_book_rounded, size: 48, color: scheme.primary),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: HorasLogo.mark(size: 64),
+                ),
                 const SizedBox(height: 20),
                 Text(
                   'Satu akun untuk progresmu.',

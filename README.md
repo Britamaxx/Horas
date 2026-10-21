@@ -108,3 +108,17 @@ Tab Latihan memakai bank soal di Firestore, bukan soal acak dari kamus:
   tanpa internet), kuis memakai soal otomatis dari kamus seperti sebelumnya.
 - Untuk memperbarui soal: ubah CSV, jalankan ulang `publish_quiz.py`.
 
+## Logo dan ikon aplikasi
+
+- Logo dipakai di layar sambutan, layar login, Beranda, dan dialog "Tentang Horas"
+  lewat widget `HorasLogo` (`lib/widgets/horas_logo.dart`). Tulisan "Horas!" otomatis
+  memakai versi terang saat tema gelap.
+- Ikon aplikasi (ikon adaptif Android 8+, ikon bertema Android 13+, ikon lama,
+  ikon web, dan favicon) sudah dibuat dan ikut terbawa saat `flutter build`.
+- Semua aset dibuat dari satu PNG master (latar polos, bubble + tulisan). Untuk
+  membuat ulang setelah logo berubah:
+  `pip install pillow numpy scipy` lalu
+  `python tools/make_brand_assets.py --source path/ke/logo_master.png`.
+- Format yang dipakai PNG, bukan SVG: SVG logo berisi gambar raster tertanam,
+  filter, dan mask yang tidak ditampilkan dengan andal oleh `flutter_svg`.
+
