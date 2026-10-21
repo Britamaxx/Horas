@@ -85,7 +85,6 @@ void main() {
         correctAnswers: 4,
         answeredQuestions: 5,
       ),
-      sentenceExercises: const [],
       authRepository: auth,
       userProfileRepository: null,
       progressStore: const LearningProgressStore(),

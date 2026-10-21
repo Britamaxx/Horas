@@ -8,7 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('profile explains pending Google login and Toba sentences', (
+  testWidgets('profile explains pending Google login and practice has only the quiz', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({
@@ -75,15 +75,10 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Latihan').last);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Susun kalimat').last);
-    await tester.pumpAndSettle();
 
-    expect(find.text('Materi kalimat belum tersedia'), findsOneWidget);
-    expect(find.textContaining('Batak Toba'), findsWidgets);
-    expect(
-      find.textContaining('belum membuat atau menilai kalimat sendiri.'),
-      findsOneWidget,
-    );
+    // Susun kalimat sudah dihapus: Latihan hanya berisi kuis.
+    expect(find.text('Susun kalimat'), findsNothing);
+    expect(find.textContaining('soal pilihan ganda'), findsWidgets);
   });
 }
 

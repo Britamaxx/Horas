@@ -1,6 +1,6 @@
 # Horas - Belajar Bahasa Batak
 
-Aplikasi Flutter untuk pemula berbahasa Indonesia yang ingin mencari terjemahan, menghafal kosakata, berlatih kuis, dan nantinya menyusun kalimat Batak Toba dari materi yang tervalidasi.
+Aplikasi Flutter untuk pemula berbahasa Indonesia yang ingin mencari terjemahan, menghafal kosakata, dan berlatih kuis.
 
 ## Menjalankan aplikasi
 
@@ -38,13 +38,7 @@ Jangan simpan password, Google OAuth token, atau kredensial Firebase di dokumen 
 
 Cloudflare Turnstile bersifat opsional sebagai pemeriksaan anti-bot. Jika dipakai, validasi token pada Cloudflare Worker/server tepercaya; secret Turnstile hanya berada di environment Worker. Turnstile bukan login Google maupun autentikasi Firebase. Cloudflare Access cocok untuk membatasi aplikasi privat, bukan sebagai login pengguna umum Horas.
 
-## Latihan kalimat
-
-CSV kamus hanya memuat kosakata dan definisi, bukan contoh kalimat atau tata bahasa. Mode **Susun kalimat** disiapkan khusus Batak Toba, tetapi akan menampilkan status materi belum tersedia sampai latihan berpasangan terjemahan Indonesia–Batak, urutan token, dan referensi sumber tervalidasi diberikan. `SentenceExerciseRepository` adalah seam untuk memuat katalog lokal/Firebase. Aplikasi hanya akan memeriksa urutan terhadap materi yang disediakan sumber; tidak mengekstrapolasi tata bahasa dari entri kamus.
-
-Setiap dokumen latihan mendatang perlu memuat `id`, `dialect` (`toba`), `indonesianPrompt`, `batakSentence`, `tokens` sesuai urutan sumber, `sourceName`, dan `sourceReference`. `tokens.join(' ')` harus sama persis dengan `batakSentence`. Tinjau hak penggunaan dan akurasi dialek sebelum menambahkan dokumen. Tanpa katalog, repository lokal memang kosong dan layar menjelaskan materi belum disediakan.
-
-`HorasApp` menerima `authRepository`, `userProfileRepository`, serta `sentenceExerciseRepository` agar adapter backend dapat diinjeksi tanpa mengubah layar. Implementasi Firebase harus menginisialisasi FlutterFire sebelum aplikasi, memetakan Google/Firebase Auth ke `AuthRepository`, menerjemahkan Firestore `Timestamp` ke `DateTime` di adapter, dan menerapkan Security Rules berbasis UID. Progres lokal tidak otomatis dikirim setelah login; migrasi/sinkronisasi memerlukan kebijakan konflik dan persetujuan produk tersendiri.
+`HorasApp` menerima `authRepository` dan `userProfileRepository` agar adapter backend dapat diinjeksi tanpa mengubah layar. Implementasi Firebase harus menginisialisasi FlutterFire sebelum aplikasi, memetakan Google/Firebase Auth ke `AuthRepository`, menerjemahkan Firestore `Timestamp` ke `DateTime` di adapter, dan menerapkan Security Rules berbasis UID. Progres lokal tidak otomatis dikirim setelah login; migrasi/sinkronisasi memerlukan kebijakan konflik dan persetujuan produk tersendiri.
 
 ## Pengembangan Firebase
 

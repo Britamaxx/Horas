@@ -17,16 +17,13 @@ import 'data/dictionary_cache_factory.dart';
 import 'data/dictionary_index.dart';
 import 'data/dictionary_repository.dart';
 import 'data/firebase_bootstrap.dart';
-import 'data/pending_sentence_exercise_repository.dart';
 import 'data/progress_repository.dart';
 import 'data/quiz_cache.dart';
 import 'data/quiz_repository.dart';
-import 'data/sentence_exercise_repository.dart';
 import 'data/synced_dictionary_repository.dart';
 import 'models/app_user.dart';
 import 'models/dictionary_entry.dart';
 import 'models/quiz_bank_question.dart';
-import 'models/sentence_exercise.dart';
 import 'models/user_profile.dart';
 import 'data/user_profile_repository.dart';
 import 'services/learning_progress_store.dart';
@@ -88,7 +85,6 @@ class HorasApp extends StatelessWidget {
     this.firebaseBackend,
     this.dictionaryRepository = const CsvDictionaryRepository(),
     this.quizRepository = const NoQuizRepository(),
-    this.sentenceExerciseRepository = const PendingSentenceExerciseRepository(),
   });
 
   final AuthRepository? authRepository;
@@ -100,7 +96,6 @@ class HorasApp extends StatelessWidget {
   final Future<FirebaseBackend?>? firebaseBackend;
   final DictionaryRepository dictionaryRepository;
   final QuizRepository quizRepository;
-  final SentenceExerciseRepository sentenceExerciseRepository;
 
   @override
   Widget build(BuildContext context) {
@@ -117,7 +112,6 @@ class HorasApp extends StatelessWidget {
         firebaseBackend: firebaseBackend,
         dictionaryRepository: dictionaryRepository,
         quizRepository: quizRepository,
-        sentenceExerciseRepository: sentenceExerciseRepository,
       ),
     );
   }
@@ -251,7 +245,6 @@ class _AppBootstrap extends StatefulWidget {
     required this.firebaseBackend,
     required this.dictionaryRepository,
     required this.quizRepository,
-    required this.sentenceExerciseRepository,
   });
 
   final AuthRepository? authRepository;
@@ -260,7 +253,6 @@ class _AppBootstrap extends StatefulWidget {
   final Future<FirebaseBackend?>? firebaseBackend;
   final DictionaryRepository dictionaryRepository;
   final QuizRepository quizRepository;
-  final SentenceExerciseRepository sentenceExerciseRepository;
 
   @override
   State<_AppBootstrap> createState() => _AppBootstrapState();
@@ -292,14 +284,11 @@ class _AppBootstrapState extends State<_AppBootstrap> {
     final savedIds = await _progressStore.loadSavedEntryIds();
     final quizStats = await _progressStore.loadQuizStats();
     final guestSession = await _GuestSessionStore.load();
-    final sentenceExercises = await widget.sentenceExerciseRepository
-        .loadExercises(dialect: 'toba');
     return AppController(
       index: index,
       savedEntryIds: savedIds,
       quizStats: quizStats,
       guestSession: guestSession,
-      sentenceExercises: sentenceExercises,
       quizBank: quizBank,
       authRepository: widget.authRepository ?? backend?.auth,
       userProfileRepository: widget.userProfileRepository ?? backend?.profiles,
@@ -392,7 +381,6 @@ class AppController extends ChangeNotifier {
     required this.index,
     required this.savedEntryIds,
     required this.quizStats,
-    required this.sentenceExercises,
     required this.authRepository,
     required this.userProfileRepository,
     required this.progressStore,
@@ -417,7 +405,6 @@ class AppController extends ChangeNotifier {
   }
 
   final DictionaryIndex index;
-  final List<SentenceExercise> sentenceExercises;
   final AuthRepository? authRepository;
   final UserProfileRepository? userProfileRepository;
   final ProgressRepository? progressRepository;
@@ -718,8 +705,6 @@ class AppController extends ChangeNotifier {
     super.dispose();
   }
 }
-
-enum _PracticeMode { quiz, sentences }
 
 enum _QuizPhase { intro, running, finished }
 
@@ -1040,7 +1025,6 @@ class _AppShellState extends State<_AppShell> {
   int _selectedIndex = 0;
   String _dictionaryQuery = '';
   int _dictionaryEpoch = 0;
-  _PracticeMode _initialPracticeMode = _PracticeMode.quiz;
   int _practiceEpoch = 0;
 
   void _openDictionary([String query = '']) {
@@ -1051,10 +1035,9 @@ class _AppShellState extends State<_AppShell> {
     });
   }
 
-  void _openPractice(_PracticeMode mode) {
+  void _openPractice() {
     setState(() {
       _selectedIndex = 2;
-      _initialPracticeMode = mode;
       _practiceEpoch++;
     });
   }
@@ -1073,7 +1056,6 @@ class _AppShellState extends State<_AppShell> {
     _PracticeScreen(
       key: ValueKey(_practiceEpoch),
       controller: widget.controller,
-      initialMode: _initialPracticeMode,
     ),
     _ProfileScreen(
       controller: widget.controller,
@@ -1169,7 +1151,7 @@ class _HomeScreen extends StatefulWidget {
 
   final AppController controller;
   final ValueChanged<String> onOpenDictionary;
-  final ValueChanged<_PracticeMode> onOpenPractice;
+  final VoidCallback onOpenPractice;
 
   @override
   State<_HomeScreen> createState() => _HomeScreenState();
@@ -1216,7 +1198,7 @@ class _HomeScreenState extends State<_HomeScreen> {
                 : 'Kata tersimpan pilihanmu: “${reviewEntry.headword}” dan lainnya.',
             actionLabel: reviewEntry == null ? 'Mulai kuis' : 'Buka kata',
             onStart: reviewEntry == null
-                ? () => widget.onOpenPractice(_PracticeMode.quiz)
+                ? widget.onOpenPractice
                 : () => widget.onOpenDictionary(reviewEntry.headword),
           );
 
@@ -1227,14 +1209,6 @@ class _HomeScreenState extends State<_HomeScreen> {
                   icon: Icons.search_rounded,
                   label: 'Jelajahi kamus',
                   onTap: () => widget.onOpenDictionary(''),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _QuickAction(
-                  icon: Icons.format_list_bulleted_rounded,
-                  label: 'Susun kalimat',
-                  onTap: () => widget.onOpenPractice(_PracticeMode.sentences),
                 ),
               ),
             ],
@@ -2375,23 +2349,16 @@ class _PracticeScreen extends StatefulWidget {
   const _PracticeScreen({
     super.key,
     required this.controller,
-    required this.initialMode,
   });
 
   final AppController controller;
-  final _PracticeMode initialMode;
 
   @override
   State<_PracticeScreen> createState() => _PracticeScreenState();
 }
 
 class _PracticeScreenState extends State<_PracticeScreen> {
-  late _PracticeMode _mode;
   late List<QuizItem> _questions;
-  SentenceExercise? _activeSentenceExercise;
-  List<int> _availableSentenceTokenIndices = [];
-  final List<int> _arrangedSentenceTokenIndices = [];
-  bool? _sentenceIsCorrect;
   int _questionIndex = 0;
   int _finalCorrect = 0;
   late List<String?> _answers;
@@ -2403,37 +2370,11 @@ class _PracticeScreenState extends State<_PracticeScreen> {
   @override
   void initState() {
     super.initState();
-    _mode = widget.initialMode;
     _questions = buildQuizItems(
       index: widget.controller.index,
       bank: widget.controller.quizBank,
     );
     _answers = List<String?>.filled(_questions.length, null);
-    _startSentenceExercise();
-  }
-
-  void _selectMode(_PracticeMode mode) {
-    if (mode == _mode) return;
-    setState(() {
-      _mode = mode;
-      if (mode == _PracticeMode.quiz && _quizPhase == _QuizPhase.finished) {
-        _restartQuiz();
-      }
-      if (mode == _PracticeMode.sentences) _startSentenceExercise();
-    });
-  }
-
-  void _startSentenceExercise() {
-    final exercises = widget.controller.sentenceExercises;
-    _activeSentenceExercise = exercises.isEmpty
-        ? null
-        : exercises[Random().nextInt(exercises.length)];
-    _availableSentenceTokenIndices = List<int>.generate(
-      _activeSentenceExercise?.tokens.length ?? 0,
-      (index) => index,
-    )..shuffle();
-    _arrangedSentenceTokenIndices.clear();
-    _sentenceIsCorrect = null;
   }
 
   void _restartQuiz() {
@@ -2551,34 +2492,13 @@ class _PracticeScreenState extends State<_PracticeScreen> {
                 Text('Latihan', style: theme.textTheme.headlineSmall),
                 const SizedBox(height: 6),
                 Text(
-                  'Latih ingatan dan susun kalimat Batak Toba.',
+                  'Latih ingatan kosakata Batak Toba.',
                   style: theme.textTheme.bodyMedium?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
-                const SizedBox(height: 16),
-                SegmentedButton<_PracticeMode>(
-                  segments: const [
-                    ButtonSegment(
-                      value: _PracticeMode.quiz,
-                      icon: Icon(Icons.quiz_outlined),
-                      label: Text('Kuis'),
-                    ),
-                    ButtonSegment(
-                      value: _PracticeMode.sentences,
-                      icon: Icon(Icons.format_list_bulleted_rounded),
-                      label: Text('Susun kalimat'),
-                    ),
-                  ],
-                  selected: {_mode},
-                  onSelectionChanged: (values) => _selectMode(values.first),
-                ),
                 const SizedBox(height: 18),
-                Expanded(
-                  child: _mode == _PracticeMode.quiz
-                      ? _buildQuiz(theme)
-                      : _buildSentencePractice(theme),
-                ),
+                Expanded(child: _buildQuiz(theme)),
               ],
             ),
           ),
@@ -3126,179 +3046,6 @@ class _PracticeScreenState extends State<_PracticeScreen> {
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildSentencePractice(ThemeData theme) {
-    final exercises = widget.controller.sentenceExercises;
-    if (exercises.isEmpty) {
-      return ListView(
-        padding: const EdgeInsets.only(bottom: 24),
-        children: [
-          const SizedBox(height: 40),
-          const _EmptyState(
-            icon: Icons.format_list_bulleted_rounded,
-            title: 'Materi kalimat belum tersedia',
-            message: 'Latihan susun kalimat Batak Toba akan dibuka setelah sumber kalimat tervalidasi disiapkan.',
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Text(
-              'Kamus kosakata tidak memuat contoh kalimat atau aturan tata bahasa. Karena itu, aplikasi belum membuat atau menilai kalimat sendiri.',
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-        ],
-      );
-    }
-
-    final exercise = _activeSentenceExercise ?? exercises.first;
-    final tokens = exercise.tokens;
-    final hasUsedAllTokens =
-        _arrangedSentenceTokenIndices.length == tokens.length;
-    final sentenceMatches =
-        hasUsedAllTokens &&
-        List<int>.generate(
-          tokens.length,
-          (index) => index,
-        ).every((index) => _arrangedSentenceTokenIndices[index] == index);
-    final hasCheckedAnswer = _sentenceIsCorrect != null;
-
-    return ListView(
-      padding: const EdgeInsets.only(bottom: 24),
-      children: [
-        Text('Susun padanan kalimat', style: theme.textTheme.titleLarge),
-        const SizedBox(height: 6),
-        Text(
-          'Urutkan kata dari materi Batak Toba yang sudah diperiksa.',
-          style: theme.textTheme.bodyMedium?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-        ),
-        const SizedBox(height: 16),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerLow,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Bahasa Indonesia · ${exercise.dialect}',
-                style: theme.textTheme.labelMedium?.copyWith(
-                  color: theme.colorScheme.primary,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                exercise.indonesianPrompt,
-                style: theme.textTheme.titleLarge,
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 20),
-        Text('Susunanmu', style: theme.textTheme.titleMedium),
-        const SizedBox(height: 10),
-        Container(
-          constraints: const BoxConstraints(minHeight: 66),
-          width: double.infinity,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: _arrangedSentenceTokenIndices.isEmpty
-              ? Text(
-                  'Pilih kata di bawah untuk mulai menyusun.',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                )
-              : Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final tokenIndex in _arrangedSentenceTokenIndices)
-                      InputChip(
-                        label: Text(tokens[tokenIndex]),
-                        onDeleted: hasCheckedAnswer
-                            ? null
-                            : () => setState(() {
-                                _arrangedSentenceTokenIndices.remove(
-                                  tokenIndex,
-                                );
-                                _availableSentenceTokenIndices.add(tokenIndex);
-                              }),
-                      ),
-                  ],
-                ),
-        ),
-        const SizedBox(height: 16),
-        Text('Kata yang tersedia', style: theme.textTheme.titleMedium),
-        const SizedBox(height: 10),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final tokenIndex in _availableSentenceTokenIndices)
-              ActionChip(
-                label: Text(tokens[tokenIndex]),
-                onPressed: hasCheckedAnswer
-                    ? null
-                    : () => setState(() {
-                        _availableSentenceTokenIndices.remove(tokenIndex);
-                        _arrangedSentenceTokenIndices.add(tokenIndex);
-                      }),
-              ),
-          ],
-        ),
-        if (hasCheckedAnswer) ...[
-          const SizedBox(height: 18),
-          Text(
-            _sentenceIsCorrect!
-                ? 'Susunan cocok dengan urutan pada sumber.'
-                : 'Bandingkan lagi urutan kata dengan materi sumber.',
-            style: theme.textTheme.bodyLarge?.copyWith(
-              color: _sentenceIsCorrect!
-                  ? theme.colorScheme.primary
-                  : theme.colorScheme.error,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          if (!_sentenceIsCorrect!) ...[
-            const SizedBox(height: 6),
-            Text(
-              'Urutan pada sumber: ${exercise.batakSentence}',
-              style: theme.textTheme.bodyMedium,
-            ),
-          ],
-          const SizedBox(height: 8),
-          Text(
-            'Sumber: ${exercise.sourceName} · ${exercise.sourceReference}',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ],
-        const SizedBox(height: 18),
-        FilledButton(
-          onPressed: hasCheckedAnswer
-              ? () => setState(_startSentenceExercise)
-              : hasUsedAllTokens
-              ? () => setState(() => _sentenceIsCorrect = sentenceMatches)
-              : null,
-          child: Text(
-            hasCheckedAnswer ? 'Kalimat berikutnya' : 'Periksa susunan',
-          ),
-        ),
-      ],
     );
   }
 }
@@ -3991,8 +3738,8 @@ class _ProfileScreenState extends State<_ProfileScreen> {
                     ),
                     children: const [
                       Text(
-                        'Aplikasi belajar Bahasa Batak Toba: kamus, kuis '
-                        'kosakata, dan latihan susun kalimat.',
+                        'Aplikasi belajar Bahasa Batak Toba: kamus dan kuis '
+                        'kosakata.',
                       ),
                     ],
                   ),
