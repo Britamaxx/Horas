@@ -3,9 +3,9 @@
 Membuat semua aset merek Horas dari SATU gambar master (PNG, latar krem polos).
 
 Hasil:
-  assets/images/horas_logo.png        logo lengkap (bubble + tulisan), latar transparan
-  assets/images/horas_logo_dark.png   sama, tulisan diwarnai terang untuk mode gelap
-  assets/images/horas_mark.png        hanya bubble bermotif, latar transparan
+  assets/images/horas_logo.webp      logo lengkap (bubble + tulisan), latar transparan
+  assets/images/horas_logo_dark.webp sama, tulisan diwarnai terang untuk mode gelap
+  assets/images/horas_mark.webp      hanya bubble bermotif, latar transparan
   android/.../mipmap-*/ic_launcher.png               ikon (Android < 8)
   android/.../mipmap-*/ic_launcher_foreground.png    ikon adaptif (Android 8+)
   android/.../mipmap-*/ic_launcher_monochrome.png    ikon bertema (Android 13+)
@@ -108,7 +108,10 @@ def place(mark, canvas, height_frac, bg=None):
 
 def save(img, path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    img.save(path, optimize=True)
+    if path.lower().endswith(".webp"):
+        img.save(path, format="WEBP", quality=92, method=6)
+    else:
+        img.save(path, optimize=True)
     print("  ", os.path.relpath(path))
 
 
@@ -123,17 +126,17 @@ def main():
     full_arr = crop_to_alpha(rgba, pad=24)
 
     # ---- aset di dalam aplikasi
-    save(resize_width(to_image(full_arr), LOGO_WIDTH), f"{root}/assets/images/horas_logo.png")
+    save(resize_width(to_image(full_arr), LOGO_WIDTH), f"{root}/assets/images/horas_logo.webp")
 
     dark = rgba.copy()
     dark[split_y:, :, :3] = DARK_WORDMARK       # hanya tulisan (di bawah bubble)
-    save(resize_width(to_image(crop_to_alpha(dark, pad=24)), LOGO_WIDTH), f"{root}/assets/images/horas_logo_dark.png")
+    save(resize_width(to_image(crop_to_alpha(dark, pad=24)), LOGO_WIDTH), f"{root}/assets/images/horas_logo_dark.webp")
 
     mark_arr = rgba.copy()
     mark_arr[split_y:, :, 3] = 0                # buang tulisan
     mark_arr = crop_to_alpha(mark_arr, pad=16)
     mark_img = to_image(mark_arr)
-    save(resize_width(mark_img, MARK_WIDTH), f"{root}/assets/images/horas_mark.png")
+    save(resize_width(mark_img, MARK_WIDTH), f"{root}/assets/images/horas_mark.webp")
 
     # ---- ikon Android
     res = f"{root}/android/app/src/main/res"

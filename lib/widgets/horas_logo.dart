@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 ///   terang saat tema gelap supaya tetap terbaca.
 /// - [HorasLogo.mark]: hanya bubble, untuk tempat yang sempit.
 ///
-/// Aset dibuat oleh `tools/make_brand_assets.py` dari satu gambar master.
+/// Aset WebP dibuat oleh `tools/make_brand_assets.py` dari satu gambar master.
 class HorasLogo extends StatelessWidget {
   const HorasLogo.full({super.key, this.width = 220}) : _isMark = false;
 
@@ -18,9 +18,9 @@ class HorasLogo extends StatelessWidget {
   final double width;
   final bool _isMark;
 
-  static const fullAsset = 'assets/images/horas_logo.png';
-  static const fullDarkAsset = 'assets/images/horas_logo_dark.png';
-  static const markAsset = 'assets/images/horas_mark.png';
+  static const fullAsset = 'assets/images/horas_logo.webp';
+  static const fullDarkAsset = 'assets/images/horas_logo_dark.webp';
+  static const markAsset = 'assets/images/horas_mark.webp';
 
   @override
   Widget build(BuildContext context) {

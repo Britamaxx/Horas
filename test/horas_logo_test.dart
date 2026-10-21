@@ -57,10 +57,9 @@ void main() {
     }
   });
 
-  test('aset logo ada, berformat PNG, dan terdaftar di pubspec', () {
+  test('aset logo ada, berformat WebP, dan terdaftar di pubspec', () {
     expect(File('pubspec.yaml').readAsStringSync(), contains('assets/images/'));
 
-    const pngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
     for (final asset in [
       HorasLogo.fullAsset,
       HorasLogo.fullDarkAsset,
@@ -68,7 +67,10 @@ void main() {
     ]) {
       final file = File(asset);
       expect(file.existsSync(), isTrue, reason: '$asset tidak ditemukan');
-      expect(file.readAsBytesSync().sublist(0, 8), pngSignature, reason: asset);
+      final bytes = file.readAsBytesSync();
+      expect(bytes.length, greaterThanOrEqualTo(12), reason: asset);
+      expect(String.fromCharCodes(bytes.sublist(0, 4)), 'RIFF', reason: asset);
+      expect(String.fromCharCodes(bytes.sublist(8, 12)), 'WEBP', reason: asset);
     }
   });
 

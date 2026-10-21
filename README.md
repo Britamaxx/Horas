@@ -119,6 +119,44 @@ Tab Latihan memakai bank soal di Firestore, bukan soal acak dari kamus:
   membuat ulang setelah logo berubah:
   `pip install pillow numpy scipy` lalu
   `python tools/make_brand_assets.py --source path/ke/logo_master.png`.
-- Format yang dipakai PNG, bukan SVG: SVG logo berisi gambar raster tertanam,
-  filter, dan mask yang tidak ditampilkan dengan andal oleh `flutter_svg`.
+- Logo dalam aplikasi disimpan sebagai WebP transparan agar lebih kecil. Ikon peluncur Android tetap PNG karena itulah format resource yang digunakan Android.
+
+## Build Android yang lebih ringan
+
+### APK untuk dibagikan langsung
+
+Jalankan dari folder proyek:
+
+```sh
+flutter clean
+flutter pub get
+flutter analyze
+flutter test
+flutter build apk --release --split-per-abi
+```
+
+Hasil APK berada di `build/app/outputs/flutter-apk/`. Untuk sebagian besar HP Android modern, pilih `app-arm64-v8a-release.apk`. Build terpisah per arsitektur menghasilkan APK yang lebih kecil dibanding satu APK universal, tetapi setiap pengguna harus menerima APK yang sesuai dengan arsitektur perangkatnya.
+
+### Google Play Store
+
+```sh
+flutter build appbundle --release
+```
+
+File AAB berada di `build/app/outputs/bundle/release/app-release.aab`. Google Play akan membuat paket yang sesuai dengan perangkat pengguna.
+
+### Memeriksa ukuran hasil build
+
+```sh
+flutter build apk --release --analyze-size
+```
+
+### Optimasi yang sudah diterapkan
+
+- Logo aplikasi memakai WebP; PNG sumber logo tidak ikut dimasukkan ke aset aplikasi. Skrip `tools/make_brand_assets.py` juga menghasilkan format WebP untuk logo.
+- Build Android release mengaktifkan R8 dan resource shrinking untuk menghapus kode dan resource Android yang tidak terpakai.
+- Kamus tetap diproses di isolate menggunakan `compute`, dan repository kamus/kuis/progres tetap memakai cache yang sudah ada agar UI tidak mengerjakan seluruh pemrosesan sekaligus.
+- Pengambilan data Firestore tetap menggunakan paket kamus dan kuis, bukan satu dokumen per kata/soal.
+
+**Penting:** ukuran APK dan performa akhir bergantung pada versi Flutter/Android Gradle Plugin serta perangkat. Setelah mengaktifkan R8, uji login Google, Firebase Auth/Firestore, pemilihan foto profil, kamus offline, dan kuis pada build release. Build release saat ini menggunakan debug signing untuk pengujian; sebelum publikasi, atur signing keystore rilis sendiri. Jika fitur native gagal setelah shrinking, nonaktifkan sementara `isMinifyEnabled` dan `isShrinkResources` untuk mengisolasi penyebab sebelum menambah aturan R8 yang spesifik.
 
