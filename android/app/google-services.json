@@ -12,7 +12,20 @@
           "package_name": "com.example.belajar_bahasa_batak"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "801942012302-bph8ofnqpqlsn29780me6mulfh30c3c3.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.belajar_bahasa_batak",
+            "certificate_hash": "598d7387074bdb56659d40b3ac9fc9bb5726bfbf"
+          }
+        },
+        {
+          "client_id": "801942012302-hppf5v1d0i29aan35tet5cnqg4pdd838.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyA54GwFMnwFYTWAH2v362R95u4Hy_tC5U8"
@@ -20,7 +33,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "801942012302-hppf5v1d0i29aan35tet5cnqg4pdd838.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }
