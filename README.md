@@ -2,6 +2,16 @@
 
 Horas adalah aplikasi Flutter untuk membantu pengguna berbahasa Indonesia mempelajari kosakata Bahasa Batak. Aplikasi menyediakan kamus, pencarian kata, kata tersimpan, latihan kuis, profil pengguna, serta penyimpanan progres belajar. Aplikasi dirancang agar sebagian fitur tetap dapat digunakan saat offline melalui data dan cache lokal.
 
+## 👥 Anggota Kelompok
+
+| NIM | Nama |
+| :---: | --- |
+| 2409106047 | Muhammad Britama Putra Jaya |
+| 2409106052 | Santoso Parlindungan Togatorop |
+| 2409106070 | Henry Moky |
+| 2409106075 | Muhammad Fathir Rahman |
+| 2409106078 | Richard Julian Makaba |
+
 ## Daftar Isi
 
 - [Fitur Utama](#fitur-utama)
