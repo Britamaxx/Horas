@@ -255,8 +255,6 @@ Uji login, pembacaan kamus, latihan kuis, kata tersimpan, dan progres akun. Jika
 
 Koleksi `dict_entries` yang mungkin ada dari impor awal tidak digunakan oleh alur aplikasi saat ini.
 
-## Mengelola Data Kamus dan Kuis
-
 ## Menjalankan Aplikasi
 
 Prasyarat: Flutter SDK yang sesuai dengan batas versi Dart pada `pubspec.yaml`, serta Android Studio/Android SDK atau perangkat target yang sesuai.
